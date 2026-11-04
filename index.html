@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="color-scheme" content="light dark">
+<title>Редактор монтажа</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+/* Mini App бота Reelseex: карточка автомонтажа на одном экране. Состояние приходит в ?s=<base64url JSON> (см.
+   trendreels/webapp.py), ответ уходит Telegram.WebApp.sendData — только изменённые поля. Цвета — из темы Telegram
+   (--tg-theme-*), запасные значения — для предпросмотра в браузере. */
+:root {
+  --bg: var(--tg-theme-secondary-bg-color, #eef0f4);
+  --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #ffffff));
+  --fg: var(--tg-theme-text-color, #0f1419);
+  --hint: var(--tg-theme-hint-color, #6f7c8a);
+  --sub: var(--tg-theme-subtitle-text-color, var(--tg-theme-hint-color, #6f7c8a));
+  --sep: var(--tg-theme-section-separator-color, rgba(60, 70, 90, .12));
+  --accent: var(--tg-theme-button-color, #2f7cf6);
+  --on-accent: var(--tg-theme-button-text-color, #ffffff);
+  --link: var(--tg-theme-link-color, #2f7cf6);
+  --danger: var(--tg-theme-destructive-text-color, #d9403a);
+  --chip: color-mix(in srgb, var(--fg) 7%, transparent);
+  --chip-on: color-mix(in srgb, var(--accent) 16%, transparent);
+  --radius: 14px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: var(--tg-theme-secondary-bg-color, #0f1216);
+    --card: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #1b2027));
+    --fg: var(--tg-theme-text-color, #f2f4f7);
+    --hint: var(--tg-theme-hint-color, #8b97a6);
+    --sep: var(--tg-theme-section-separator-color, rgba(255, 255, 255, .09));
+    --accent: var(--tg-theme-button-color, #4b8ff5);
+    --link: var(--tg-theme-link-color, #6ea4ff);
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.35 var(--font); }
+body {
+  padding-left: max(14px, env(safe-area-inset-left, 0px));
+  padding-right: max(14px, env(safe-area-inset-right, 0px));
+  padding-block: calc(var(--tg-content-safe-area-inset-top, 0px) + 10px) calc(96px + var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  -webkit-font-smoothing: antialiased;
+}
+button, textarea { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+a { color: var(--link); text-decoration: none; }
+[hidden] { display: none !important; }
+
+.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 6px 2px 14px; }
+.top h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+.top .sub { color: var(--hint); font-size: 14px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.credits { flex: none; text-align: right; font-size: 13px; color: var(--hint); line-height: 1.25; padding-top: 4px; }
+.credits b { display: block; font-size: 17px; color: var(--fg); font-variant-numeric: tabular-nums; }
+.credits.low b { color: var(--danger); }
+
+.strip { display: flex; gap: 3px; height: 34px; margin: 0 2px 16px; }
+.strip .seg {
+  flex: 1 1 0; min-width: 22px; border-radius: 8px; background: var(--accent); color: var(--on-accent);
+  display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; overflow: hidden;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.strip .seg:nth-child(even) { opacity: .78; }
+.strip.empty { border: 1.5px dashed var(--hint); border-radius: 10px; color: var(--hint); align-items: center;
+  justify-content: center; font-size: 14px; }
+
+.sec { background: var(--card); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 12px; }
+.sec h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--sub); }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
+.row + .row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--sep); }
+.row .lbl { min-width: 0; }
+.row .lbl small { display: block; color: var(--hint); font-size: 13px; margin-top: 1px; }
+.hint { color: var(--hint); font-size: 13.5px; margin: 8px 0 0; }
+.understood { margin: 0 0 10px; font-size: 15px; }
+.understood b { font-weight: 600; }
+textarea {
+  width: 100%; min-height: 64px; resize: vertical; border: 1px solid var(--sep); border-radius: 10px; padding: 9px 11px;
+  background: var(--bg); outline: none;
+}
+textarea:focus { border-color: var(--accent); }
+textarea::placeholder { color: var(--hint); }
+
+.segc { display: flex; background: var(--chip); border-radius: 10px; padding: 3px; gap: 2px; }
+.segc button { flex: 1 1 0; padding: 7px 4px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--hint);
+  transition: background .12s, color .12s; }
+.segc button[aria-pressed="true"] { background: var(--card); color: var(--fg); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { padding: 7px 12px; border-radius: 999px; background: var(--chip); font-size: 14px; font-weight: 500;
+  color: var(--fg); border: 1.5px solid transparent; transition: background .12s, border-color .12s; }
+.chip[aria-pressed="true"] { background: var(--chip-on); border-color: var(--accent); color: var(--fg); }
+.chips.scroll { flex-wrap: nowrap; overflow-x: auto; margin: 0 -14px; padding: 2px 14px; scrollbar-width: none; }
+.chips.scroll::-webkit-scrollbar { display: none; }
+.chips.scroll .chip { flex: none; }
+
+.sound { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--sep); }
+.sound .name { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.sound .meta { color: var(--hint); font-size: 13.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.sound .how { margin: 8px 0 0; font-size: 14.5px; }
+.sound .how b { font-weight: 600; }
+.vars { margin-top: 10px; }
+.vars .lab { color: var(--sub); font-size: 13px; margin-bottom: 6px; }
+.vsum { margin: 8px 0 0; font-size: 14px; color: var(--fg); }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.act { padding: 8px 12px; border-radius: 10px; background: var(--chip); font-size: 14px; font-weight: 500; color: var(--fg); }
+.act.link { color: var(--link); }
+.act:disabled { opacity: .5; }
+
+.sw { position: relative; flex: none; width: 48px; height: 30px; border-radius: 15px; background: var(--chip);
+  transition: background .15s; }
+.sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 12px;
+  background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: transform .15s; }
+.sw[aria-checked="true"] { background: var(--accent); }
+.sw[aria-checked="true"]::after { transform: translateX(18px); }
+.sw:focus-visible, .chip:focus-visible, .segc button:focus-visible, .act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.warn { color: var(--danger); font-size: 13.5px; margin-top: 8px; }
+.foot { color: var(--hint); font-size: 13px; text-align: center; margin: 4px 0 0; }
+.save { display: block; width: 100%; margin-top: 12px; padding: 12px; border-radius: 12px; background: var(--chip);
+  font-weight: 600; font-size: 15px; color: var(--fg); }
+.demo-main { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px max(14px, env(safe-area-inset-left, 0px))
+  calc(10px + env(safe-area-inset-bottom, 0px)); background: var(--bg); }
+.demo-main button { width: 100%; padding: 14px; border-radius: 12px; background: var(--accent); color: var(--on-accent);
+  font-weight: 600; font-size: 16px; }
+.error { text-align: center; color: var(--hint); padding: 60px 20px; }
+.toast { position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  background: var(--fg); color: var(--bg); padding: 10px 14px; border-radius: 10px; font-size: 14px; max-width: 90vw;
+  overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+(function () {
+  "use strict";
+  var tg = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData !== undefined ? window.Telegram.WebApp : null;
+  var inTelegram = !!(tg && tg.initData);
+  var STYLE_ORDER = ["auto", "talking", "vlog", "sport", "aesthetic", "trend", "ad"];
+  var MUSIC = [["trend", "Тренд"], ["library", "Бесплатная"], ["none", "Без музыки"]];
+  var TREND = {up: "⬆️ растёт", new: "🆕 новый", down: "⬇️ падает"};
+
+  var DEMO = {v: 1, mid: 42, cost: 8, credits: 15, clips: [12, 8, 15, 6], summary: "плавные переходы · чередую зал и закаты",
+    style: "auto", styles: {auto: "Авто", talking: "Говорящая голова", vlog: "Влог", sport: "Спорт/зал", aesthetic: "Эстетика",
+    trend: "Под тренд", ad: "Реклама"}, music: "trend", own: null, captions: true, embed: null,
+    sound: {id: 7, name: "МАЯК X — Украсть тебя", bpm: 124, trend: "up", shorts: "34 тыс. роликов",
+      link: "https://www.youtube.com/source/x/shorts", how: "быстрые склейки по 2 доли, вход на дроп, 15 с",
+      variants: [{id: 1, title: "быстрый", icon: "⚡", summary: "склейки каждую долю, 7–9 кадров", ex: "https://youtube.com/shorts/a"},
+                 {id: 2, title: "средний", icon: "🎬", summary: "по 2 доли, 5–6 кадров, дроп на 1,4 с", ex: "https://youtube.com/shorts/b"},
+                 {id: 3, title: "плавный", icon: "🌊", summary: "длинные планы, 3 кадра, без резких переходов", ex: null}]},
+    alts: [{id: 9, name: "Artist B — Song B", bpm: 100, trend: "new", shorts: "12 тыс. роликов", link: null, how: "медленные планы", variants: []},
+           {id: 11, name: "Artist C — Song C", bpm: 110, trend: null, shorts: null, link: null, how: null, variants: []}]};
+
+  function readState() {
+    var m = /[?&]s=([A-Za-z0-9_-]+)/.exec(location.search);
+    if (!m) return null;
+    try {
+      var b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      while (b64.length % 4) b64 += "=";
+      var bin = atob(b64), bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch (e) { return null; }
+  }
+
+  var loaded = readState();
+  var demo = false;
+  if (!loaded) {
+    if (inTelegram) { render_error(); return; }
+    loaded = DEMO; demo = true;
+  }
+  var pool = [loaded.sound].concat(loaded.alts || []).filter(Boolean);
+  var cur = {style: loaded.style || "auto", music: loaded.music || "trend", captions: loaded.captions !== false,
+             embed: loaded.embed, soundIdx: 0, variant: (loaded.sound && loaded.sound.variant) || null, wish: ""};
+  var ownRemoved = false;
+
+  function h(tag, attrs, children) {
+    var el = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "class") el.className = attrs[k];
+      else if (k === "html") el.innerHTML = attrs[k];
+      else if (k.slice(0, 2) === "on") el.addEventListener(k.slice(2), attrs[k]);
+      else if (attrs[k] !== null && attrs[k] !== undefined && attrs[k] !== false) el.setAttribute(k, attrs[k] === true ? "" : attrs[k]);
+    });
+    (children || []).forEach(function (c) {
+      if (c === null || c === undefined || c === false) return;
+      el.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return el;
+  }
+  function haptic(kind) { try { if (tg && tg.HapticFeedback) { kind === "impact" ? tg.HapticFeedback.impactOccurred("light") : tg.HapticFeedback.selectionChanged(); } } catch (e) {} }
+  function mmss(t) { t = Math.round(t); return Math.floor(t / 60) + ":" + ("0" + (t % 60)).slice(-2); }
+  function plural(n, a, b, c) { var m = n % 10, k = n % 100; return n + " " + (m === 1 && k !== 11 ? a : m >= 2 && m <= 4 && (k < 10 || k >= 20) ? b : c); }
+  function openLink(u) { if (!u) return; try { if (tg) tg.openLink(u); else window.open(u, "_blank"); } catch (e) { window.open(u, "_blank"); } }
+
+  function render() {
+    var root = document.getElementById("app");
+    root.textContent = "";
+    var clips = loaded.clips || [], total = clips.reduce(function (a, b) { return a + b; }, 0);
+    var low = loaded.credits < loaded.cost;
+
+    root.appendChild(h("div", {class: "top"}, [
+      h("div", null, [h("h1", null, ["Автомонтаж"]),
+        h("div", {class: "sub"}, [clips.length ? plural(clips.length, "клип", "клипа", "клипов") + " · " + mmss(total) : "клипов пока нет"])]),
+      h("div", {class: "credits" + (low ? " low" : "")}, [h("b", null, [plural(loaded.credits, "кредит", "кредита", "кредитов")]), "монтаж · " + loaded.cost + " кр."])
+    ]));
+
+    if (clips.length) {
+      root.appendChild(h("div", {class: "strip", role: "img", "aria-label": "Клипы по порядку"}, clips.map(function (d) {
+        return h("div", {class: "seg", style: "flex-grow:" + Math.max(d, 2)}, [d ? d + " с" : "?"]);
+      })));
+    } else {
+      root.appendChild(h("div", {class: "strip empty"}, ["Пришли клипы в чат — до 10, можно альбомом"]));
+    }
+
+    // пожелание
+    var wishSec = h("div", {class: "sec"}, [h("h2", null, ["Пожелание"])]);
+    if (loaded.summary) wishSec.appendChild(h("p", {class: "understood"}, [h("b", null, ["Понял так: "]), loaded.summary]));
+    var ta = h("textarea", {id: "wish", rows: 2, placeholder: loaded.summary ? "Что поменять? Например: «побыстрее, без текста»" : "Например: «душевно, чередуй зал и закаты»"});
+    ta.value = cur.wish;
+    ta.addEventListener("input", function () { cur.wish = ta.value; });
+    wishSec.appendChild(ta);
+    root.appendChild(wishSec);
+
+    // музыка
+    var musicSec = h("div", {class: "sec"}, [h("h2", null, ["Музыка"])]);
+    if (loaded.own && !ownRemoved) {
+      musicSec.appendChild(h("div", {class: "row"}, [
+        h("div", {class: "lbl"}, ["🎵 Свой трек: " + loaded.own, h("small", null, ["Права на трек — на тебе. Заменить — пришли другой файл в чат."])]),
+        h("button", {class: "act", onclick: function () { ownRemoved = true; cur.music = "trend"; haptic(); render(); }}, ["Убрать"])
+      ]));
+      musicSec.appendChild(h("p", {class: "hint"}, ["Трек вшивается в файл, тренд-звук при этом не используется."]));
+    } else {
+      musicSec.appendChild(h("div", {class: "segc", role: "group", "aria-label": "Музыка"}, MUSIC.map(function (m) {
+        return h("button", {"aria-pressed": String(cur.music === m[0]), onclick: function () { cur.music = m[0]; haptic(); render(); }}, [m[1]]);
+      })));
+      if (loaded.own && ownRemoved) musicSec.appendChild(h("p", {class: "warn"}, ["Свой трек будет убран из монтажа."]));
+      var snd = pool[cur.soundIdx];
+      if (cur.music === "trend") {
+        if (snd) musicSec.appendChild(renderSound(snd));
+        else musicSec.appendChild(h("p", {class: "hint"}, ["Трендовых звуков с готовым разбором пока нет — смонтирую без привязки к ритму."]));
+        if (snd && loaded.embed !== null && loaded.embed !== undefined) {
+          musicSec.appendChild(h("div", {class: "row", style: "margin-top:12px;padding-top:12px;border-top:1px solid var(--sep)"}, [
+            h("div", {class: "lbl"}, ["Вшить звук в файл", h("small", null, [cur.embed ? "Звук будет в самом ролике" : "Звук ставишь в Instagram — подскажу как"])]),
+            h("button", {class: "sw", role: "switch", "aria-checked": String(!!cur.embed), "aria-label": "Вшить звук в файл",
+              onclick: function () { cur.embed = !cur.embed; haptic("impact"); render(); }})
+          ]));
+        } else if (snd) {
+          musicSec.appendChild(h("p", {class: "hint"}, ["Звук ставится в Instagram — после монтажа подскажу как. В файле будет живой звук клипов."]));
+        }
+      } else if (cur.music === "library") {
+        musicSec.appendChild(h("p", {class: "hint"}, ["Бесплатный трек по настроению, вшит в файл" + (snd ? " · в темпе звука «" + snd.name + "»" : "") + "."]));
+      } else {
+        musicSec.appendChild(h("p", {class: "hint"}, ["Живой звук клипов, без музыки."]));
+      }
+    }
+    root.appendChild(musicSec);
+
+    // стиль
+    var styles = loaded.styles || {};
+    var keys = STYLE_ORDER.filter(function (k) { return k in styles; }).concat(Object.keys(styles).filter(function (k) { return STYLE_ORDER.indexOf(k) < 0; }));
+    root.appendChild(h("div", {class: "sec"}, [h("h2", null, ["Стиль"]),
+      h("div", {class: "chips", role: "group", "aria-label": "Стиль"}, keys.map(function (k) {
+        return h("button", {class: "chip", "aria-pressed": String(cur.style === k), onclick: function () { cur.style = k; haptic(); render(); }}, [styles[k]]);
+      }))]));
+
+    // текст
+    root.appendChild(h("div", {class: "sec"}, [h("div", {class: "row"}, [
+      h("div", {class: "lbl"}, ["Текст на экране", h("small", null, ["Пословные субтитры и хук в начале"])]),
+      h("button", {class: "sw", role: "switch", "aria-checked": String(cur.captions), "aria-label": "Текст на экране",
+        onclick: function () { cur.captions = !cur.captions; haptic("impact"); render(); }})
+    ])]));
+
+    if (low && clips.length) root.appendChild(h("p", {class: "warn", style: "text-align:center"}, ["Не хватает кредитов: " + loaded.credits + " из " + loaded.cost + ". Пополнить — «👤 Профиль» в боте."]));
+    if (!(tg && tg.SecondaryButton && tg.isVersionAtLeast && tg.isVersionAtLeast("7.10")) && clips.length) {
+      root.appendChild(h("button", {class: "save", onclick: function () { submit(false); }}, ["Сохранить настройки без монтажа"]));
+    }
+    root.appendChild(h("p", {class: "foot"}, [clips.length ? "Склейки лягут на ритм выбранного звука. Ролик — 9:16, до минуты." : "Настройки сохранятся — клипы можно прислать потом."]));
+
+    if (!tg || demo) {
+      root.appendChild(h("div", {class: "demo-main"}, [h("button", {onclick: function () { submit(!!clips.length); }}, [mainText(clips.length)])]));
+    }
+    syncButtons(clips.length);
+  }
+
+  function renderSound(snd) {
+    var box = h("div", {class: "sound"});
+    var meta = [];
+    if (snd.bpm) meta.push(snd.bpm + " BPM");
+    if (TREND[snd.trend]) meta.push(TREND[snd.trend]);
+    if (snd.shorts) meta.push(snd.shorts);
+    box.appendChild(h("div", {class: "name"}, ["🎶 " + snd.name]));
+    if (meta.length) box.appendChild(h("div", {class: "meta"}, [meta.join(" · ")]));
+    var vars = snd.variants || [];
+    var v = vars.filter(function (x) { return x.id === cur.variant; })[0] || null;
+    if (vars.length >= 2) {
+      box.appendChild(h("div", {class: "vars"}, [
+        h("div", {class: "lab"}, ["Под этот звук монтируют по-разному — выбери пример"]),
+        h("div", {class: "chips scroll", role: "group", "aria-label": "Пример монтажа"}, [h("button", {class: "chip", "aria-pressed": String(!cur.variant),
+            onclick: function () { cur.variant = null; haptic(); render(); }}, ["🎲 Как у большинства"])].concat(vars.map(function (x) {
+          return h("button", {class: "chip", "aria-pressed": String(cur.variant === x.id),
+            onclick: function () { cur.variant = x.id; haptic(); render(); }}, [(x.icon ? x.icon + " " : "") + (x.title || "пример " + x.id)]);
+        })))
+      ]));
+      if (v && v.summary) box.appendChild(h("p", {class: "vsum"}, [h("b", null, ["Пример " + v.id + " из " + vars.length + ": "]), v.summary]));
+      else if (snd.how) box.appendChild(h("p", {class: "how"}, [h("b", null, ["Как монтируют: "]), snd.how]));
+    } else if (snd.how) {
+      box.appendChild(h("p", {class: "how"}, [h("b", null, ["Как монтируют: "]), snd.how]));
+    }
+    var acts = h("div", {class: "acts"});
+    if (pool.length > 1) acts.appendChild(h("button", {class: "act", onclick: function () {
+      cur.soundIdx = (cur.soundIdx + 1) % pool.length; cur.variant = null; haptic("impact"); render();
+    }}, ["🔁 Другой звук · " + (cur.soundIdx + 1) + "/" + pool.length]));
+    if (v && v.ex) acts.appendChild(h("button", {class: "act link", onclick: function () { openLink(v.ex); }}, ["▶️ Пример ролика"]));
+    else if (snd.link) acts.appendChild(h("button", {class: "act link", onclick: function () { openLink(snd.link); }}, ["▶️ Ролики под звуком"]));
+    if (acts.childNodes.length) box.appendChild(acts);
+    return box;
+  }
+
+  function mainText(nClips) { return nClips ? "🎬 Смонтировать · " + loaded.cost + " кр." : "Сохранить настройки"; }
+
+  function diff(go) {
+    var d = {v: 1, mid: loaded.mid, go: !!go};
+    if (cur.style !== (loaded.style || "auto")) d.style = cur.style;
+    var music = cur.music;
+    if (loaded.own && !ownRemoved) music = "own";
+    if (music !== "own" && (music !== loaded.music || ownRemoved)) d.music = music;
+    if (cur.captions !== (loaded.captions !== false)) d.captions = cur.captions;
+    if (loaded.embed !== null && loaded.embed !== undefined && cur.embed !== loaded.embed) d.embed = !!cur.embed;
+    var snd = pool[cur.soundIdx], was = loaded.sound ? loaded.sound.id : null, wasVar = (loaded.sound && loaded.sound.variant) || null;
+    if (snd && snd.id !== was) d.sound_id = snd.id;
+    if (cur.variant !== wasVar || (snd && snd.id !== was && cur.variant)) d.variant = cur.variant || null;
+    if (cur.wish.trim()) d.wish = cur.wish.trim().slice(0, 1000);
+    return d;
+  }
+
+  var sent = false;
+  function submit(go) {
+    if (sent) return;
+    var payload = JSON.stringify(diff(go));
+    if (tg && inTelegram && !demo) {
+      sent = true;
+      haptic("impact");
+      try { tg.sendData(payload); } catch (e) { sent = false; toast("Не удалось отправить: " + e); }
+      return;
+    }
+    toast((go ? "Смонтировать → " : "Сохранить → ") + payload);
+  }
+  function toast(text) {
+    var old = document.querySelector(".toast"); if (old) old.remove();
+    var t = h("div", {class: "toast"}, [text]); document.body.appendChild(t);
+    setTimeout(function () { t.remove(); }, 4000);
+  }
+
+  var buttonsWired = false;
+  function syncButtons(nClips) {
+    if (!tg) return;
+    try {
+      tg.MainButton.setParams({text: mainText(nClips), is_visible: true, is_active: true});
+      if (tg.SecondaryButton && tg.isVersionAtLeast && tg.isVersionAtLeast("7.10")) {
+        tg.SecondaryButton.setParams({text: "Сохранить", is_visible: !!nClips, position: "left"});
+      }
+      if (!buttonsWired) {
+        buttonsWired = true;
+        tg.MainButton.onClick(function () { submit(!!(loaded.clips || []).length); });
+        if (tg.SecondaryButton && tg.SecondaryButton.onClick) tg.SecondaryButton.onClick(function () { submit(false); });
+      }
+    } catch (e) {}
+  }
+
+  function render_error() {
+    document.getElementById("app").appendChild(h("div", {class: "error"}, [
+      h("div", {style: "font-size:40px"}, ["🎬"]), h("p", null, ["Открой редактор кнопкой под карточкой монтажа в чате с ботом."])]));
+  }
+
+  if (tg) {
+    try {
+      tg.ready(); tg.expand();
+      tg.setHeaderColor("secondary_bg_color"); tg.setBackgroundColor("secondary_bg_color");
+      if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+    } catch (e) {}
+  }
+  render();
+})();
+</script>
+</body>
+</html>
