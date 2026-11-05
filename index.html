@@ -156,7 +156,9 @@ textarea::placeholder { color: var(--hint); }
                  {id: 2, title: "средний", icon: "🎬", summary: "по 2 доли, 5–6 кадров, дроп на 1,4 с", ex: "https://youtube.com/shorts/b"},
                  {id: 3, title: "плавный", icon: "🌊", summary: "длинные планы, 3 кадра, без резких переходов", ex: null}]},
     alts: [{id: 9, name: "Artist B — Song B", bpm: 100, trend: "new", shorts: "12 тыс. роликов", link: null, how: "медленные планы", variants: []},
-           {id: 11, name: "Artist C — Song C", bpm: 110, trend: null, shorts: null, link: null, how: null, variants: []}]};
+           {id: 11, name: "Artist C — Song C", bpm: 110, trend: null, shorts: null, link: null, how: null, variants: []},
+           {id: 12, name: "Artist D — Song D", bpm: 128, trend: "up", shorts: "3,4 тыс. роликов"}],
+    alts_from: 0, alts_total: 27, alts_more: 3};
 
   function readState() {
     var m = /[?&]s=([A-Za-z0-9_-]+)/.exec(location.search);
@@ -326,6 +328,13 @@ textarea::placeholder { color: var(--hint); }
     if (pool.length > 1) acts.appendChild(h("button", {class: "act", onclick: function () {
       cur.soundIdx = (cur.soundIdx + 1) % pool.length; cur.variant = null; haptic("impact"); render();
     }}, ["🔁 Другой звук · " + (cur.soundIdx + 1) + "/" + pool.length]));
+    // пачка запасных звуков кончилась — следующая пачка (новая карточка) или весь список «🎶 Тренд-звуки»
+    if (loaded.alts_more !== null && loaded.alts_more !== undefined) {
+      acts.appendChild(h("button", {class: "act", onclick: function () { more({alts_from: loaded.alts_more}, "Ещё звуки → "); }},
+        ["⏭ Ещё звуки · " + Math.max(0, (loaded.alts_total || 0) - (loaded.alts_more || 0))]));
+    } else if ((loaded.alts_total || 0) > (loaded.alts || []).length || loaded.alts_from) {
+      acts.appendChild(h("button", {class: "act", onclick: function () { more({list: true}, "Список → "); }}, ["📜 Все тренд-звуки"]));
+    }
     if (v && v.ex) acts.appendChild(h("button", {class: "act link", onclick: function () { openLink(v.ex); }}, ["▶️ Пример ролика"]));
     else if (snd.link) acts.appendChild(h("button", {class: "act link", onclick: function () { openLink(snd.link); }}, ["▶️ Ролики под звуком"]));
     if (acts.childNodes.length) box.appendChild(acts);
@@ -360,7 +369,32 @@ textarea::placeholder { color: var(--hint); }
     if ("embed" in d) p.push("E" + (d.embed ? 1 : 0));
     if (d.sound_id) p.push("i" + d.sound_id);
     if ("variant" in d) p.push("v" + (d.variant || 0));
+    if ("alts_from" in d) p.push("a" + d.alts_from);
+    if (d.list) p.push("L");
     return p.join("-");
+  }
+
+  // «⏭ Ещё звуки» / «📜 Все тренд-звуки»: просьба боту без правок настроек (новая карточка со следующей пачкой или список)
+  function more(extra, label) {
+    if (sent) return;
+    var d = {v: 1, mid: loaded.mid, go: false};
+    Object.keys(extra).forEach(function (k) { d[k] = extra[k]; });
+    var payload = viaLink ? startPayload(d) : JSON.stringify(d);
+    if (tg && inTelegram && !demo) {
+      sent = true;
+      haptic("impact");
+      try {
+        if (viaLink) {
+          tg.openTelegramLink("https://t.me/" + loaded.bot + "?start=" + payload);
+          toast("Теперь нажми кнопку внизу чата 👇");
+          setTimeout(function () { try { tg.close(); } catch (e) {} }, 900);
+        } else {
+          tg.sendData(payload);
+        }
+      } catch (e) { sent = false; toast("Не удалось отправить: " + e); }
+      return;
+    }
+    toast(label + payload);
   }
 
   var sent = false;
