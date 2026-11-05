@@ -180,6 +180,9 @@ textarea::placeholder { color: var(--hint); }
   var cur = {style: loaded.style || "auto", music: loaded.music || "trend", captions: loaded.captions !== false,
              embed: loaded.embed, soundIdx: 0, variant: (loaded.sound && loaded.sound.variant) || null, wish: ""};
   var ownRemoved = false;
+  // Открыт inline-кнопкой из карточки (в состоянии есть имя бота): sendData оттуда недоступен, ответ уходит
+  // deep-link'ом t.me/<бот>?start=w1-… (до 64 символов — поэтому пожелание пишут текстом в чат).
+  var viaLink = !!loaded.bot;
 
   function h(tag, attrs, children) {
     var el = document.createElement(tag);
@@ -223,11 +226,16 @@ textarea::placeholder { color: var(--hint); }
     // пожелание
     var wishSec = h("div", {class: "sec"}, [h("h2", null, ["Пожелание"])]);
     if (loaded.summary) wishSec.appendChild(h("p", {class: "understood"}, [h("b", null, ["Понял так: "]), loaded.summary]));
+    if (viaLink) {
+      wishSec.appendChild(h("p", {class: "understood"}, [loaded.summary ? "Что поменять — напиши текстом в чат с ботом: он поймёт и обновит карточку." : "Напиши пожелание текстом в чат с ботом (стиль, переходы, настроение) — он поймёт и обновит карточку."]));
+      root.appendChild(wishSec);
+    } else {
     var ta = h("textarea", {id: "wish", rows: 2, placeholder: loaded.summary ? "Что поменять? Например: «побыстрее, без текста»" : "Например: «душевно, чередуй зал и закаты»"});
     ta.value = cur.wish;
     ta.addEventListener("input", function () { cur.wish = ta.value; });
     wishSec.appendChild(ta);
     root.appendChild(wishSec);
+    }
 
     // музыка
     var musicSec = h("div", {class: "sec"}, [h("h2", null, ["Музыка"])]);
@@ -341,14 +349,36 @@ textarea::placeholder { color: var(--hint); }
     return d;
   }
 
+  // Параметр start для ответа deep-link'ом — зеркало trendreels/webapp.py (parse_start):
+  // w1-<mid>[-g][-s<стиль>][-u<t|l|n>][-c<0|1>][-E<0|1>][-i<звук>][-v<пример>] (v0 — «как у большинства»).
+  function startPayload(d) {
+    var MC = {trend: "t", library: "l", none: "n"}, p = ["w1", String(d.mid)];
+    if (d.go) p.push("g");
+    if (d.style) p.push("s" + d.style);
+    if (d.music && MC[d.music]) p.push("u" + MC[d.music]);
+    if ("captions" in d) p.push("c" + (d.captions ? 1 : 0));
+    if ("embed" in d) p.push("E" + (d.embed ? 1 : 0));
+    if (d.sound_id) p.push("i" + d.sound_id);
+    if ("variant" in d) p.push("v" + (d.variant || 0));
+    return p.join("-");
+  }
+
   var sent = false;
   function submit(go) {
     if (sent) return;
-    var payload = JSON.stringify(diff(go));
+    var d = diff(go), payload = viaLink ? startPayload(d) : JSON.stringify(d);
     if (tg && inTelegram && !demo) {
       sent = true;
       haptic("impact");
-      try { tg.sendData(payload); } catch (e) { sent = false; toast("Не удалось отправить: " + e); }
+      try {
+        if (viaLink) {
+          tg.openTelegramLink("https://t.me/" + loaded.bot + "?start=" + payload);
+          toast("Теперь нажми кнопку внизу чата 👇");
+          setTimeout(function () { try { tg.close(); } catch (e) {} }, 900);
+        } else {
+          tg.sendData(payload);
+        }
+      } catch (e) { sent = false; toast("Не удалось отправить: " + e); }
       return;
     }
     toast((go ? "Смонтировать → " : "Сохранить → ") + payload);
@@ -377,7 +407,7 @@ textarea::placeholder { color: var(--hint); }
 
   function render_error() {
     document.getElementById("app").appendChild(h("div", {class: "error"}, [
-      h("div", {style: "font-size:40px"}, ["🎬"]), h("p", null, ["Открой редактор кнопкой под карточкой монтажа в чате с ботом."])]));
+      h("div", {style: "font-size:40px"}, ["🎬"]), h("p", null, ["Открой редактор кнопкой «🎬 Открыть редактор» в карточке монтажа в чате с ботом."])]));
   }
 
   if (tg) {
