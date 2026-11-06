@@ -1,6 +1,7 @@
 /* Демо-режим Mini App Reelseex: моки всех ручек API (docs/api-contract.md §3) в памяти страницы.
    Включается, когда window.REELSEEX.api пуст или страница открыта не из Telegram (нет initData).
-   Данные ненастоящие; действия меняют состояние моков (монтаж: go → queued → running → done за ~4,5 с).
+   Данные ненастоящие; действия меняют состояние моков (монтаж: go → queued → running → done за ~4,5 с;
+   «Добавить видео» — POST /montage/{id}/clips добавляет клип с именем файла, байты никуда не уходят).
    Параметры URL для демо: ?onboard=1 — начать с онбординга; ?user=1 — не админ (без админских переключателей). */
 (function (root) {
   "use strict";
@@ -22,6 +23,7 @@
   const PLATFORMS = [{code: "yt", title: "YouTube Shorts"}, {code: "tt", title: "TikTok"}, {code: "ig", title: "Instagram Reels"}, {code: "vk", title: "VK Клипы"}];
   const PACKS = [{credits: 20, stars: 50}, {credits: 60, stars: 130}, {credits: 150, stars: 300}];
   const MAX_RADAR = 30;
+  const LIMITS = {clips: 10, total_s: 300, upload_mb: 200};   // как MontageOut.limits у API (§3.3)
 
   // ---------- пользователь ----------
   const user = {
@@ -135,19 +137,19 @@
     const parts = String(wish || "").toLowerCase().replace(/[.!?]+$/, "").split(/\s*(?:,|;| и | а | но )\s*/).map((x) => x.trim()).filter(Boolean);
     return parts.length ? parts.slice(0, 4).join(" · ") : null;
   }
-  function montageOut(mo) {
+  function montageOut(mo, warnings) {
     const snd = mo.sound_id ? byId(sounds, mo.sound_id) : null;
     const done = mo.status === "done", fin = done || mo.status === "error";
     const result = mo.result ? Object.assign({}, mo.result, {sound: snd && mo.music === "trend" ? soundBrief(snd) : null}) : null;
     return {
       id: mo.id, status: mo.status, cost: PRICES.montage, credits: user.credits,
-      clips: mo.clips.map((c) => Object.assign({}, c)), summary: mo.summary, wish: mo.wish,
+      clips: mo.clips.map((c) => Object.assign({src: "chat", name: null}, c)), summary: mo.summary, wish: mo.wish,
       style: mo.style, styles: STYLES, music: mo.own ? "own" : mo.music, own: mo.own, captions: mo.captions,
       embed: user.is_admin ? !!user.embed_trend : null,
       sound: snd ? soundCard(snd, mo.variant) : null, variant: mo.variant, result, error: mo.error,
       can: {go: mo.status === "collecting", cancel: mo.status === "collecting", again: fin && mo.clips.length > 0,
         sound: done && mo.music === "trend" && !mo.own, track: done && mo.music === "library" && !mo.own},
-      created_at: mo.created_at, updated_at: mo.updated_at
+      created_at: mo.created_at, updated_at: mo.updated_at, warnings: warnings || [], limits: Object.assign({}, LIMITS)
     };
   }
   function touch(mo) { mo.updated_at = iso(Date.now()); }
@@ -397,6 +399,22 @@
     mo.seed = (mo.seed || 0) + 1;
     render(mo);
     return {ok: true};
+  });
+  // Клип из приложения: имя — из ?name= (как у API), байты тела игнорируем; длительность 5–12 с — по хэшу имени.
+  on("POST", /^\/montage\/(\d+)\/clips$/, ([id], q, b) => {
+    const mo = getMontage(id);
+    if (mo.status !== "collecting") throw err(409, "closed", "Этот монтаж уже запущен или закрыт.");
+    const name = String(q.get("name") || (b && b.name) || "clip.mp4").split(/[\\/]/).pop().slice(0, 80);
+    if (!/\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(name) && !/^video\//.test(String(b && b.type || ""))) throw err(400, "bad_request", "Это не видео — пришли файл mp4/mov.");
+    if (mo.clips.length >= LIMITS.clips) return montageOut(mo, ["Уже " + LIMITS.clips + " клипов — это максимум."]);
+    let hsh = 0;
+    for (let i = 0; i < name.length; i++) hsh = (hsh * 31 + name.charCodeAt(i)) % 1000003;
+    const duration = 5 + (hsh % 8);
+    const total = mo.clips.reduce((a, c) => a + (c.duration || 0), 0);
+    if (total + duration > LIMITS.total_s) return montageOut(mo, ["Клип длиннее лимита: всего уже " + Math.round(total) + " с из " + LIMITS.total_s + "."]);
+    const size = int((b && b.size) || 0) > 1 ? int(b.size) : 2_500_000 + duration * 400_000;
+    mo.clips.push({n: mo.clips.length + 1, duration, size, src: "app", name}); touch(mo);
+    return montageOut(mo);
   });
   on("DELETE", /^\/montage\/(\d+)\/clips\/(\d+)$/, ([id, n]) => {
     const mo = getMontage(id);

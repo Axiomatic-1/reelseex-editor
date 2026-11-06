@@ -22,12 +22,14 @@
   const STATUS = {collecting: "собираю клипы", queued: "в очереди", running: "монтирую", done: "готов", error: "ошибка", cancelled: "отменён"};
   const REASON = {montage: "монтаж", analysis: "разбор", script: "сценарий", welcome: "подарок на старт", stars: "пополнение ⭐", stars_refund: "возврат ⭐", refund: "возврат", grant: "начисление", admin: "начисление"};
   const hasSecondary = !!(tg && tg.SecondaryButton && tg.isVersionAtLeast && tg.isVersionAtLeast("7.10"));
+  const LIMITS = {clips: 10, total_s: 300, upload_mb: 200};   // запасные лимиты, пока сервер не прислал mo.limits
 
   // ---------- состояние ----------
   const S = {
     me: null, fatal: null, tab: "trends", card: null, scroll: {},
     onb: {step: 0, slug: null, custom: "", about: "", platforms: [], saving: false},
-    montage: {cur: undefined, loading: false, error: null, list: null, listLoading: false, picker: null, wishDraft: null, savingWish: false, busy: false},
+    montage: {cur: undefined, loading: false, error: null, list: null, listLoading: false, picker: null, wishDraft: null, savingWish: false, busy: false,
+      uploads: [], uploading: false},   // uploads: [{name, pct, state: wait|up|ok|err, msg}] — файлы, которые сейчас грузим в монтаж
     sounds: {items: [], page: 0, hasMore: true, loading: false, error: null},
     trends: {items: [], offset: 0, limit: 5, collecting: false, loading: false, loaded: false, hasMore: true, error: null, link: "", linkBusy: false},
     radar: {items: null, max: 30, loading: false, error: null, link: "", linkBusy: false},
@@ -125,7 +127,19 @@
   // ---------- API ----------
   function httpMessage(status) {
     return {400: "Не понял запрос", 401: "Открой приложение из Telegram", 402: "Не хватает кредитов", 403: "Нет доступа", 404: "Не найдено",
-      409: "Сейчас нельзя", 429: "Слишком часто — подожди минуту", 500: "Ошибка на сервере", 502: "Сервер не отвечает", 503: "Сервер не отвечает"}[status] || "Что-то пошло не так";
+      409: "Сейчас нельзя", 413: "Файл слишком большой", 429: "Слишком часто — подожди минуту", 500: "Ошибка на сервере", 502: "Сервер не отвечает",
+      503: "Сервер не отвечает"}[status] || "Что-то пошло не так";
+  }
+  // Тело ответа API → данные (2xx) или объект ошибки {status, error, message, need?, have?} (§2).
+  function parseReply(status, txt) {
+    let data = null;
+    try { data = txt ? JSON.parse(txt) : null; } catch (e) { data = null; }
+    if (status >= 200 && status < 300) return data;
+    const d = data && typeof data === "object" ? data : {};
+    const e = {status, error: d.error || "error", message: d.message || httpMessage(status)};
+    if (d.need !== undefined) e.need = d.need;
+    if (d.have !== undefined) e.have = d.have;
+    throw e;
   }
   function api(path, opts) {
     opts = opts || {};
@@ -138,18 +152,32 @@
     const init = {method, headers};
     if (opts.body !== undefined) { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(opts.body); }
     return fetch(API + path, init).then(
-      (r) => r.text().then((txt) => {
-        let data = null;
-        try { data = txt ? JSON.parse(txt) : null; } catch (e) { data = null; }
-        if (r.ok) return data;
-        const d = data && typeof data === "object" ? data : {};
-        const e = {status: r.status, error: d.error || "error", message: d.message || httpMessage(r.status)};
-        if (d.need !== undefined) e.need = d.need;
-        if (d.have !== undefined) e.have = d.have;
-        throw e;
-      }),
+      (r) => r.text().then((txt) => parseReply(r.status, txt)),
       () => { throw {status: 0, error: "network", message: "Нет связи с сервером"}; }
     );
+  }
+  // Загрузка клипа из приложения (§3.3 POST /montage/{id}/clips): тело — сами байты файла, не multipart.
+  // XMLHttpRequest ради upload.onprogress; в демо — через api() (мок добавляет клип, прогресс рисуем сами).
+  function uploadClip(mid, file, onProgress) {
+    const nm = encodeURIComponent(file.name || "clip.mp4");
+    if (DEMO) {
+      let p = 0;
+      const t = setInterval(() => { p = Math.min(p + 0.3, 0.9); if (onProgress) onProgress(p); }, 120);
+      return api("/montage/" + mid + "/clips?name=" + nm, {method: "POST", body: {name: file.name, size: file.size, type: file.type}}).finally(() => clearInterval(t));
+    }
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const fail = (msg) => reject({status: 0, error: "network", message: msg});
+      xhr.open("POST", API + "/montage/" + mid + "/clips?name=" + nm);
+      xhr.setRequestHeader("Authorization", "tma " + tg.initData);
+      xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
+      xhr.upload.onprogress = (ev) => { if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total); };
+      xhr.onload = () => { try { resolve(parseReply(xhr.status, xhr.responseText)); } catch (e) { reject(e); } };
+      xhr.onerror = () => fail("Нет связи с сервером");
+      xhr.onabort = () => fail("Загрузка прервана");
+      xhr.ontimeout = () => fail("Сервер долго не отвечает");
+      xhr.send(file);
+    });
   }
   // Ошибки по §2: 401 — экран «открой из Telegram», 402 — экран «не хватает кредитов», сеть — тост с «Повторить», остальное — тост.
   function handleError(e, retry) {
@@ -220,7 +248,10 @@
     render();
     window.scrollTo(0, 0);
   }
-  function openCard(card) { S.scroll[S.tab] = window.scrollY; S.card = card; stopPolls(); render(); window.scrollTo(0, 0); }
+  function openCard(card) {
+    if (card.type === "niche") S.profile.nicheDraft = undefined;   // иначе невыбранный вариант с прошлого раза висит «к сохранению»
+    S.scroll[S.tab] = window.scrollY; S.card = card; stopPolls(); render(); window.scrollTo(0, 0);
+  }
   function closeCard() {
     const back = S.card && S.card.back;
     S.card = null; stopPolls(); render();
@@ -346,7 +377,9 @@
     const presets = (S.me && S.me.presets) || [];
     const input = keepInput(h("input", {type: "text", maxlength: 60, placeholder: "Своя ниша — напиши пару слов", value: p.custom || ""}));
     input.addEventListener("input", () => { p.onCustom(input.value); const chips = root.querySelectorAll(".chip[aria-pressed=\"true\"]"); chips.forEach((c) => c.setAttribute("aria-pressed", "false")); syncMain(); });
-    function syncMain() { if (BTN.main) { BTN.main.active = !!(input.value.trim().length >= 2 || p.selectedSlug); applyButtons($("#view")); } }
+    // ввод в поле снимает пресет (onCustom → slug=null), поэтому активность кнопки — только по тексту: p.selectedSlug здесь
+    // устарел с прошлого рендера и держал «Дальше»/«Сохранить нишу» активной при 1 символе или пустом поле
+    function syncMain() { if (BTN.main) { BTN.main.active = input.value.trim().length >= 2; applyButtons($("#view")); } }
     const root = section("Ниша", [
       h("div", {class: "chips"}, presets.map((x) => h("button", {class: "chip", "aria-pressed": String(p.selectedSlug === x.slug), onclick: () => { input.value = ""; p.onPick(x.slug); }}, [x.title]))),
       h("div", {class: "field"}, [input])
@@ -443,9 +476,81 @@
     const M = S.montage;
     const box = h("div");
     box.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, ["Монтаж"]), h("div", {class: "sub"}, ["нет текущего монтажа"])]), creditsBadge()]));
-    box.appendChild(stateBox("📥", "Пришли клипы в чат с ботом", "До 10 клипов, можно альбомом — в подписи напиши пожелание. Подберу трендовый звук и смонтирую под его ритм. Клипы появятся здесь сами.",
-      [h("button", {class: "act primary", disabled: M.busy, onclick: newMontage}, ["Новый монтаж"]), h("button", {class: "act", onclick: () => openBot()}, ["Открыть чат"])]));
+    box.appendChild(stateBox("📥", "Добавь видео — смонтирую", "Добавь видео кнопкой или пришли в чат с ботом (до " + LIMITS.clips + "). Подберу трендовый звук и смонтирую под его ритм.",
+      [h("button", {class: "act primary", disabled: M.busy || M.uploading, onclick: pickFiles}, ["➕ Добавить видео"]),
+        h("button", {class: "act", disabled: M.busy || M.uploading, onclick: newMontage}, ["Новый монтаж"]), h("button", {class: "act", onclick: () => openBot()}, ["Открыть чат"])]));
+    if (M.uploads.length) box.appendChild(section("Загрузка", renderUploadRows()));
     return box;
+  }
+  // ---------- загрузка клипов из приложения ----------
+  const picker = h("input", {type: "file", accept: "video/*,.mp4,.mov", multiple: true, hidden: true, tabindex: "-1", "aria-hidden": "true"});
+  picker.addEventListener("change", () => { const files = Array.from(picker.files || []); picker.value = ""; addFiles(files); });
+  document.body.appendChild(picker);
+  function pickFiles() { if (S.montage.uploading) return; haptic("impact"); picker.value = ""; picker.click(); }
+  function limitsOf(mo) { return Object.assign({}, LIMITS, (mo && mo.limits) || {}); }
+  function shortName(name) { return String(name || "видео").replace(/\.[a-z0-9]{1,5}$/i, "").slice(0, 60); }
+  function upLabel(u) { return u.state === "wait" ? "в очереди" : u.state === "ok" ? "готово" : u.state === "err" ? (u.msg || "не загрузился") : u.pct + "%"; }
+  function renderUploadRows() {
+    return h("div", {class: "ups", id: "ups", "aria-live": "polite"}, S.montage.uploads.map((u) => h("div", {class: "up " + u.state}, [
+      h("div", {class: "ln"}, [h("span", {class: "nm"}, [shortName(u.name)]), h("span", {class: "pct"}, [upLabel(u)])]),
+      h("div", {class: "bar", "aria-hidden": "true"}, [h("i", {style: "width:" + (u.state === "ok" ? 100 : u.pct) + "%"})])
+    ])));
+  }
+  function renderUploads() {   // прогресс — точечно, без перерисовки экрана
+    const box = $("#ups");
+    if (!box) return;
+    S.montage.uploads.forEach((u, i) => {
+      const el = box.children[i];
+      if (!el) return;
+      el.className = "up " + u.state;
+      el.querySelector(".pct").textContent = upLabel(u);
+      el.querySelector(".bar i").style.width = (u.state === "ok" ? 100 : u.pct) + "%";
+    });
+  }
+  // Файлы из <input type=file>: проверки по mo.limits → нет монтажа — POST /montage → по одному POST …/clips с прогрессом.
+  async function addFiles(files) {
+    const M = S.montage;
+    files = (files || []).filter((f) => f && f.size !== undefined);
+    if (!files.length || M.uploading) return;
+    let mo = M.cur || null;
+    const lim = limitsOf(mo), have = mo && mo.clips ? mo.clips.length : 0;
+    if (have + files.length > lim.clips) {
+      haptic("warning");
+      toast("Максимум " + lim.clips + " клипов" + (have && have < lim.clips ? " — можно добавить ещё " + (lim.clips - have) : ""));
+      return;
+    }
+    const big = files.find((f) => f.size > lim.upload_mb * 1024 * 1024);
+    if (big) { haptic("warning"); toast("«" + shortName(big.name) + "» больше " + lim.upload_mb + " МБ — сожми или обрежь его"); return; }
+    const empty = files.find((f) => !f.size);
+    if (empty) { haptic("warning"); toast("«" + shortName(empty.name) + "» пустой — это не видео"); return; }
+    M.uploading = true; M.uploads = files.map((f) => ({name: f.name, pct: 0, state: "wait", msg: null}));
+    render();
+    try {
+      if (!mo) {
+        mo = await api("/montage", {method: "POST", body: {}});
+        M.cur = mo; M.wishDraft = null; M.picker = null; M.list = null;
+        render();
+      }
+      for (let i = 0; i < files.length; i++) {
+        const u = M.uploads[i];
+        u.state = "up"; renderUploads();
+        try {
+          const out = await uploadClip(mo.id, files[i], (p) => { u.pct = Math.round(p * 100); renderUploads(); });
+          u.pct = 100; u.state = "ok"; renderUploads();
+          if (M.cur && M.cur.id === mo.id) { M.cur = out; if (S.me) S.me.credits = out.credits; }
+          const warn = (out && out.warnings) || [];
+          if (warn.length) { haptic("warning"); toast(warn.join(" ")); } else haptic("success");
+          if (S.tab === "montage" && !S.card) render();
+        } catch (e) {
+          u.state = "err"; u.msg = e && e.message; renderUploads();
+          if (e && e.status === 401) { showAuth(); return; }
+          if (!e || !e.status) { const rest = files.slice(i); handleError(e, () => addFiles(rest)); break; }   // нет связи — остальные не шлём, «Повторить» догрузит их
+          handleError(e);
+          if (e.status === 404 || e.status === 409) { M.cur = undefined; break; }   // монтаж закрыт/отменён — перечитаем
+        }
+      }
+    } catch (e) { handleError(e, () => addFiles(files)); }
+    finally { M.uploading = false; M.uploads = []; if (S.tab === "montage" && !S.card) render(); }
   }
   function creditsBadge() {
     const me = S.me, cost = me && me.prices ? me.prices.montage : null;
@@ -453,7 +558,7 @@
   }
   async function newMontage() {
     const M = S.montage;
-    if (M.busy) return;
+    if (M.busy || M.uploading) return;
     M.busy = true; render();
     try { M.cur = await api("/montage", {method: "POST", body: {}}); M.wishDraft = null; M.picker = null; haptic("success"); if (M.list) M.list = null; }
     catch (e) { handleError(e, newMontage); }
@@ -468,18 +573,25 @@
       h("div", null, [h("h1", null, ["Монтаж"]), h("div", {class: "sub"}, [clips.length ? plural(clips.length, "клип", "клипа", "клипов") + " · " + mmss(total) : "клипов пока нет"])]),
       h("div", {class: "credits" + (low ? " low" : "")}, [h("b", null, [plural(mo.credits, "кредит", "кредита", "кредитов")]), "монтаж · " + mo.cost + " кр."])
     ]));
-    // клипы
+    // клипы: из чата (src chat) и загруженные из приложения (src app, с именем файла)
+    const lim = limitsOf(mo), full = clips.length >= lim.clips;
+    const addBtn = h("button", {class: "act" + (clips.length ? "" : " primary"), disabled: M.uploading || full, onclick: pickFiles}, [M.uploading ? "Загружаю…" : "➕ Добавить видео"]);
+    const hint = "Добавь видео кнопкой или пришли в чат с ботом (до " + lim.clips + ").";
     if (clips.length) {
       root.appendChild(h("div", {class: "strip", role: "img", "aria-label": "Клипы по порядку"}, clips.map((c) =>
         h("div", {class: "seg", style: "flex-grow:" + Math.max(Number(c.duration) || 2, 2)}, [c.duration ? Math.round(c.duration) + " с" : "?"]))));
       root.appendChild(section("Клипы", [
         h("div", {class: "clips"}, clips.map((c) => h("div", {class: "clipc"}, [h("span", {class: "n"}, [String(c.n)]),
+          c.src === "app" && c.name ? h("span", {class: "nm", title: c.name}, [shortName(c.name)]) : null,
           h("span", {class: "d"}, [c.duration ? Math.round(c.duration) + " с" : "?"]),
           h("button", {class: "x", "aria-label": "Убрать клип " + c.n, disabled: M.busy, onclick: () => removeClip(mo.id, c.n)}, ["×"])]))),
-        h("p", {class: "hint"}, [clips.length < 10 ? "Ещё клипы — пришли в чат с ботом (всего до 10)." : "Это максимум — 10 клипов."])
+        M.uploads.length ? renderUploadRows() : null,
+        h("div", {class: "acts"}, [addBtn]),
+        h("p", {class: "hint"}, [full ? "Это максимум — " + lim.clips + " клипов." : hint])
       ]));
     } else {
-      root.appendChild(h("div", {class: "strip empty"}, ["Пришли клипы в чат с ботом — до 10, можно альбомом"]));
+      root.appendChild(h("div", {class: "strip empty"}, [hint.replace(/\.$/, "")]));
+      root.appendChild(section(null, [M.uploads.length ? renderUploadRows() : null, h("div", {class: "acts", style: M.uploads.length ? null : "margin-top:0"}, [addBtn])]));
     }
     // пожелание
     const draft = M.wishDraft === null ? (mo.wish || "") : M.wishDraft;
@@ -513,9 +625,9 @@
     root.appendChild(section(null, row("Текст на экране", "Пословные субтитры и хук в начале", sw(mo.captions !== false, "Текст на экране", () => patchMontage(mo.id, {captions: mo.captions === false})))));
     if (low && clips.length) root.appendChild(h("p", {class: "warn", style: "text-align:center"}, ["Не хватает кредитов: " + mo.credits + " из " + mo.cost + ". ",
       h("button", {class: "lnk", onclick: () => { S.profile.packsOpen = true; go("profile"); }}, ["Пополнить"])]));
-    root.appendChild(h("p", {class: "foot"}, [clips.length ? "Склейки лягут на ритм выбранного звука. Ролик — 9:16, до минуты." : "Настройки сохранятся — клипы можно прислать потом."]));
-    setButtons({text: "🎬 Смонтировать · " + mo.cost + " кр.", active: clips.length > 0 && can.go !== false && !M.busy, onClick: goMontage},
-      can.cancel === false ? null : {text: "Отмена", active: !M.busy, onClick: cancelMontage});
+    root.appendChild(h("p", {class: "foot"}, [clips.length ? "Склейки лягут на ритм выбранного звука. Ролик — 9:16, до минуты." : "Настройки сохранятся — клипы можно добавить потом."]));
+    setButtons({text: M.uploading ? "⏳ Загружаю клипы…" : "🎬 Смонтировать · " + mo.cost + " кр.", active: clips.length > 0 && can.go !== false && !M.busy && !M.uploading, onClick: goMontage},
+      can.cancel === false ? null : {text: "Отмена", active: !M.busy && !M.uploading, onClick: cancelMontage});
     return root;
   }
   function renderSoundBlock(mo) {
@@ -655,7 +767,7 @@
   }
   async function cancelMontage() {
     const M = S.montage, mo = M.cur;
-    if (!mo || M.busy) return;
+    if (!mo || M.busy || M.uploading) return;   // во время загрузки отмена неактивна: иначе остаток файлов уйдёт в закрытый монтаж (409)
     if (!(await confirmDialog("Отменить монтаж? Клипы и настройки пропадут."))) return;
     M.busy = true; render();
     try { await api("/montage/" + mo.id + "/cancel", {method: "POST"}); haptic("impact"); M.cur = null; M.wishDraft = null; M.picker = null; M.list = null; toast("Монтаж отменён"); }
@@ -884,7 +996,7 @@
       M.cur = mo; M.wishDraft = null; M.picker = null; M.list = null;
       haptic("success");
       S.card = null; go("montage");
-      toast((mo.clips || []).length ? "Звук выбран — монтирую под него" : "Звук выбран — пришли клипы в чат с ботом");
+      toast((mo.clips || []).length ? "Звук выбран — монтирую под него" : "Звук выбран — добавь видео или пришли клипы в чат");
     } catch (e) { handleError(e); }
     finally { M.busy = false; mainProgress(false); render(); }
   }
@@ -892,7 +1004,11 @@
   // ---------- Тренды ----------
   function renderTrendsTab() {
     const T = S.trends, root = h("div");
-    root.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, ["Тренды"]), h("div", {class: "sub"}, [S.me.niche ? S.me.niche.title : "ниша не выбрана"])]), creditsBadge()]));
+    // ниша в шапке — тапабельная: лента «только спорт» чаще всего значит «выбрана не та ниша», менять её можно отсюда
+    root.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, ["Тренды"]), h("div", {class: "sub"}, [
+      S.me.niche ? S.me.niche.title : "ниша не выбрана", " · ",
+      h("button", {class: "lnk", onclick: () => { haptic(); openCard({type: "niche"}); }}, [S.me.niche ? "сменить" : "выбрать"])
+    ])]), creditsBadge()]));
     root.appendChild(renderLinkForm(T, "Ссылка на ролик или канал", "Разобрать", submitLink, "Ролик — покажу карточку с разбором и сценарием. Канал YouTube или профиль TikTok — добавлю в радар."));
     if (!T.loaded && !T.loading) loadTrends(true);
     if (T.collecting) root.appendChild(stateBox("🔎", "Собираю подборку по твоей нише", "Обычно пара минут. Загляни чуть позже — или пришли ссылку на ролик, разберу сразу.",
@@ -1032,7 +1148,7 @@
       const mo = await api(path, {method: "POST"});
       M.cur = mo; M.wishDraft = null; M.picker = null; M.list = null;
       haptic("success"); S.card = null; go("montage");
-      toast((mo.clips || []).length ? "Монтаж готов к запуску" : "Пришли клипы в чат с ботом — смонтирую по этой механике");
+      toast((mo.clips || []).length ? "Монтаж готов к запуску" : "Добавь видео или пришли клипы в чат — смонтирую по этой механике");
     } catch (e) { handleError(e); }
     finally { M.busy = false; render(); }
   }

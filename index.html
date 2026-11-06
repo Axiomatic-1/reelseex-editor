@@ -87,6 +87,20 @@ i { font-style: italic; }
 .clipc { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--chip); font-size: 14px; }
 .clipc .n { font-weight: 700; color: var(--hint); }
 .clipc .x, .item .x { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--danger); font-size: 18px; flex: none; }
+.clipc .nm { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--hint); }
+/* загрузка клипов из приложения: строка на файл — имя, процент, полоса */
+.ups { margin-top: 10px; }
+.up { font-size: 13.5px; }
+.up + .up { margin-top: 8px; }
+.up .ln { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.up .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up .pct { flex: none; max-width: 55%; text-align: right; color: var(--hint); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.up.ok .pct { color: var(--ok); }
+.up.err .pct { color: var(--danger); }
+.up .bar { height: 4px; margin-top: 5px; border-radius: 2px; background: var(--chip); overflow: hidden; }
+.up .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+.up.err .bar i { background: var(--danger); }
+.up.wait .bar i { opacity: .4; }
 
 /* секции и строки */
 .sec { background: var(--card); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 12px; }
