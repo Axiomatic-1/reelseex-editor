@@ -25,7 +25,8 @@ window.REELSEEX = {api: "https://<узел>.<tailnet>.ts.net", bot: "Reelseex_bo
 `api` — адрес без слэша в конце; API должен отвечать origin'у Pages (CORS, `API_ORIGIN`). Каждый запрос уходит
 с заголовком `Authorization: tma <Telegram.WebApp.initData>`, тело и ответы — JSON.
 
-В репозитории `config.js` **всегда с пустым `api`** (демо-режим, `tests/test_webapp_spa.py` это проверяет): адрес
+`config.js`: `api` — основной адрес API, `apiAlt` — запасные входы того же API (приложение берёт первый отвечающий
+`/health`, помнит выбор на сессию и переключается при обрыве; см. ops/DEPLOY.md «Входы в API»). В репозитории `config.js` **всегда с пустым `api`** (демо-режим, `tests/test_webapp_spa.py` это проверяет): адрес
 подставляет `scripts/deploy_webapp.sh` в копию на Pages — из переменной окружения `API_PUBLIC_URL` или строки
 `API_PUBLIC_URL=` в `~/Usd-dash/trendreels/.env`; без адреса скрипт останавливается. `--dry-run` делает всё, кроме
 push, и печатает diff. Порядок деплоя целиком — `ops/DEPLOY.md`.

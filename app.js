@@ -19,8 +19,33 @@
     } catch (e) { /* ignore */ }
     return false;
   })();
-  const API = String(CFG.api || "").replace(/\/+$/, "");
+  // Несколько входов в один API (config.js: api + apiAlt): Funnel из-за VPN/провайдера может не открываться там, где
+  // открывается Cloudflare Tunnel, и наоборот. Берём первый отвечающий (/health) и помним выбор на сессию.
+  const API_LIST = [CFG.api].concat(Array.isArray(CFG.apiAlt) ? CFG.apiAlt : []).map((u) => String(u || "").replace(/\/+$/, "")).filter(Boolean);
+  let API = API_LIST[0] || "";
+  try { const saved = sessionStorage.getItem("reelseex_api"); if (saved && API_LIST.indexOf(saved) >= 0) API = saved; } catch (e) { /* ignore */ }
   const DEMO = !API || !inTelegram;
+  function setApi(base) { API = base; try { sessionStorage.setItem("reelseex_api", base); } catch (e) { /* ignore */ } }
+  function health(base, ms) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), ms);
+    return fetch(base + "/health", {cache: "no-store", signal: ac.signal}).then((r) => r.ok).catch(() => false).finally(() => clearTimeout(timer));
+  }
+  let failoverP = null;
+  // Текущий вход не отвечает — пробуем остальные по очереди (6 с каждый). true — переключились.
+  function failover() {
+    if (API_LIST.length < 2) return Promise.resolve(false);
+    if (!failoverP) {
+      failoverP = (async () => {
+        for (const base of API_LIST) {
+          if (base === API) continue;
+          if (await health(base, 6000)) { setApi(base); return true; }
+        }
+        return false;
+      })().finally(() => { failoverP = null; });
+    }
+    return failoverP;
+  }
   const BOT = String(CFG.bot || "Reelseex_bot").replace(/^@/, "");
   const DEMO_API = window.REELSEEX_DEMO || null;
   const TABS = [["montage", "🎬", "Монтаж"], ["sounds", "🎶", "Звуки"], ["trends", "🔥", "Тренды"], ["radar", "🎯", "Радар"], ["profile", "👤", "Профиль"]];
@@ -141,7 +166,8 @@
   // Диагностика связи: 4 пробы с таймаутом 12 с — сеть до API без CORS, CORS на /health, /me с авторизацией, сама страница.
   async function netDiag(pre) {
     const host = API.replace(/^https?:\/\//, "");
-    const lines = ["API: " + host, "сеть по данным браузера: " + (navigator.onLine ? "онлайн" : "офлайн")];
+    const lines = ["API: " + host + (API_LIST.length > 1 ? " (запасные: " + API_LIST.filter((b) => b !== API).map((b) => b.replace(/^https?:\/\//, "")).join(", ") + ")" : ""),
+      "сеть по данным браузера: " + (navigator.onLine ? "онлайн" : "офлайн")];
     const show = (tail) => { pre.textContent = lines.concat(tail ? [tail] : []).join("\n"); };
     const timed = (url, init) => {
       const ac = new AbortController();
@@ -194,10 +220,14 @@
     const headers = {Authorization: "tma " + tg.initData};
     const init = {method, headers};
     if (opts.body !== undefined) { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(opts.body); }
-    return fetch(API + path, init).then(
-      (r) => r.text().then((txt) => parseReply(r.status, txt)),
-      () => { throw {status: 0, error: "network", message: "Нет связи с сервером"}; }
-    );
+    const netErr = {status: 0, error: "network", message: "Нет связи с сервером"};
+    const go = () => fetch(API + path, init).then((r) => r.text().then((txt) => parseReply(r.status, txt)));
+    // сеть упала — один раз пробуем другой вход (api/apiAlt) и повторяем запрос; GET/DELETE идемпотентны, POST/PATCH
+    // повторяем только если до сервера точно не дошло (fetch отверг до ответа — иначе сюда не попадаем)
+    return go().catch((e) => {
+      if (e && e.status !== undefined) throw e;                 // ответ сервера (parseReply) — не сетевая ошибка
+      return failover().then((ok) => (ok ? go().catch((e2) => { throw (e2 && e2.status !== undefined) ? e2 : netErr; }) : Promise.reject(netErr)));
+    });
   }
   // Загрузка клипа из приложения (§3.3 POST /montage/{id}/clips): тело — сами байты файла, не multipart.
   // XMLHttpRequest ради upload.onprogress; в демо — через api() (мок добавляет клип, прогресс рисуем сами).
