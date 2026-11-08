@@ -1341,11 +1341,28 @@
       if (tg.onEvent) tg.onEvent("themeChanged", () => { try { tg.setHeaderColor("secondary_bg_color"); tg.setBackgroundColor("secondary_bg_color"); } catch (e) { /* ignore */ } });
     } catch (e) { /* старый клиент */ }
   }
+  // Диагностика запуска для экрана «Не получил данные Telegram»: только имена параметров и длины, без значений.
+  function launchDiag() {
+    const out = [];
+    const keys = (str) => String(str || "").replace(/^[#?]/, "").split("&").map((kv) => kv.split("=")[0]).filter(Boolean).join(",");
+    try { out.push("путь: " + location.pathname + (location.search ? " ?" + keys(location.search) : "")); } catch (e) { out.push("путь: ?"); }
+    try { out.push("#hash: " + (location.hash ? keys(location.hash) + " (" + location.hash.length + " симв.)" : "пусто")); } catch (e) { out.push("#hash: ?"); }
+    try {
+      const sp = JSON.parse(sessionStorage.getItem("__telegram__initParams") || "null");
+      out.push("sessionStorage initParams: " + (sp ? Object.keys(sp).join(",") || "пусто" : "нет"));
+    } catch (e) { out.push("sessionStorage: недоступен"); }
+    out.push("SDK: " + (window.Telegram && window.Telegram.WebApp ? "есть" : "нет") + ", initData: " + (tg ? tg.initData.length : "-") + " симв.");
+    try { out.push("платформа: " + (tg ? tg.platform + " v" + tg.version : "-") + ", proxy: " + (window.TelegramWebviewProxy ? "да" : "нет")); } catch (e) { /* ignore */ }
+    try { out.push("UA: " + navigator.userAgent.slice(0, 90)); } catch (e) { /* ignore */ }
+    try { out.push("referrer: " + (document.referrer || "нет")); } catch (e) { /* ignore */ }
+    return out.join("\n");
+  }
   async function boot() {
     initTelegram();
     if (API && !inTelegram && launchedByTelegram) {
       S.fatal = () => stateBox("⚠️", "Не получил данные Telegram", "Приложение открыто из Telegram, но данные входа не пришли (не отработал SDK). Закрой приложение и открой снова из чата с ботом.",
-        [h("button", {class: "act", onclick: () => location.reload()}, ["Перезагрузить"]), h("button", {class: "act", onclick: () => openBot()}, ["Открыть чат с ботом"])]);
+        [h("button", {class: "act", onclick: () => location.reload()}, ["Перезагрузить"]), h("button", {class: "act", onclick: () => openBot()}, ["Открыть чат с ботом"]),
+         h("pre", {class: "diag"}, [launchDiag()])]);
       render(); return;
     }
     render();
