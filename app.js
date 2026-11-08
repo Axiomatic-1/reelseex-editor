@@ -129,7 +129,39 @@
   }
   function errorBox(e, retry) {
     const net = !e || e.status === 0;
-    return stateBox(net ? "📡" : "😕", net ? "Нет связи" : "Не получилось", (e && e.message) || "Попробуй ещё раз", retry ? [h("button", {class: "act", onclick: retry}, ["Повторить"])] : null);
+    const actions = retry ? [h("button", {class: "act", onclick: retry}, ["Повторить"])] : [];
+    if (net && !DEMO) {
+      // «Нет связи» на телефоне при живом сервере: показываем, где именно рвётся (сеть до API / CORS / авторизация)
+      const pre = h("pre", null, [""]);
+      const det = h("details", {class: "diag", ontoggle: () => { if (det.open && !pre.textContent) netDiag(pre); }}, [h("summary", null, ["Проверить связь"]), pre]);
+      actions.push(det);
+    }
+    return stateBox(net ? "📡" : "😕", net ? "Нет связи" : "Не получилось", (e && e.message) || "Попробуй ещё раз", actions.length ? actions : null);
+  }
+  // Диагностика связи: 4 пробы с таймаутом 12 с — сеть до API без CORS, CORS на /health, /me с авторизацией, сама страница.
+  async function netDiag(pre) {
+    const host = API.replace(/^https?:\/\//, "");
+    const lines = ["API: " + host, "сеть по данным браузера: " + (navigator.onLine ? "онлайн" : "офлайн")];
+    const show = (tail) => { pre.textContent = lines.concat(tail ? [tail] : []).join("\n"); };
+    const timed = (url, init) => {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 12000);
+      return fetch(url, Object.assign({cache: "no-store", signal: ac.signal}, init || {})).finally(() => clearTimeout(timer));
+    };
+    const probe = async (label, fn) => {
+      const t0 = Date.now();
+      show(label + "…");
+      try { const r = await fn(); lines.push(label + ": ок · " + r + " · " + (Date.now() - t0) + " мс"); }
+      catch (err) { lines.push(label + ": СБОЙ · " + ((err && (err.name === "AbortError" ? "таймаут 12 с" : err.message)) || err) + " · " + (Date.now() - t0) + " мс"); }
+      show();
+    };
+    await probe("1. сеть до API (без CORS)", () => timed(API + "/health", {mode: "no-cors"}).then((r) => "ответ типа " + r.type));
+    await probe("2. CORS: GET /health", () => timed(API + "/health").then((r) => "HTTP " + r.status));
+    await probe("3. GET /me с авторизацией", () => timed(API + "/me", {headers: {Authorization: "tma " + (tg ? tg.initData : "")}}).then((r) => "HTTP " + r.status));
+    await probe("4. эта страница (GitHub Pages)", () => timed(location.pathname + "config.js?cb=" + Date.now()).then((r) => "HTTP " + r.status));
+    lines.push("", "1 — сбой: телефон не достаёт до сервера (VPN, DNS, оператор). Открой https://" + host + "/health в Safari, с VPN и без: должно быть {\"ok\":true}.",
+      "1 — ок, 2 — сбой: CORS/настройка API. 3 — 401: данные входа Telegram не приняты.");
+    show();
   }
   function section(title, children, extraClass) { return h("div", {class: "sec" + (extraClass ? " " + extraClass : "")}, [title ? h("h2", null, [title]) : null, children]); }
   function sw(checked, label, onchange) { return h("button", {class: "sw", role: "switch", "aria-checked": String(!!checked), "aria-label": label, onclick: onchange}); }

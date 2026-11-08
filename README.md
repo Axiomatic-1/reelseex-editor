@@ -115,3 +115,10 @@ curl -sS https://telegram.org/js/telegram-web-app.js -o webapp/vendor/telegram-w
 ThemeParams`, без `tgWebAppData` (iOS 9.6, 2026-11-09). `boot()` показывает экран «Не получил данные Telegram» (открой
 кнопкой меню чата или inline-кнопкой; «Техническая информация» — имена параметров запуска) — в демо не уходит
 (`tests/test_webapp_spa.py::test_no_silent_demo_when_launched_by_telegram`).
+
+## «Нет связи» — проверка связи
+
+Экран сетевой ошибки (не демо) содержит свёрнутый блок «Проверить связь» (`netDiag`): четыре пробы с таймаутом 12 с —
+`/health` без CORS (`mode: no-cors`, доходит ли телефон до сервера вообще), `GET /health` с CORS, `GET /me` с
+авторизацией, сама страница на Pages — и подсказка, что значит каждый сбой. Нужен, когда сервер снаружи отвечает
+(`scripts/api_check.sh --external`), а с телефона «Нет связи» (2026-11-09: VPN/DNS на устройстве).
