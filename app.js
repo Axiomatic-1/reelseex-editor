@@ -206,6 +206,8 @@
     if (status >= 200 && status < 300) return data;
     const d = data && typeof data === "object" ? data : {};
     const e = {status, error: d.error || "error", message: d.message || httpMessage(status)};
+    // 5xx без JSON — ответил не наш API, а вход перед ним (Cloudflare 530 «туннель не подключён», шлюз): повод сменить вход
+    if (status >= 500 && data === null) e.gateway = true;
     if (d.need !== undefined) e.need = d.need;
     if (d.have !== undefined) e.have = d.have;
     throw e;
@@ -225,8 +227,9 @@
     // сеть упала — один раз пробуем другой вход (api/apiAlt) и повторяем запрос; GET/DELETE идемпотентны, POST/PATCH
     // повторяем только если до сервера точно не дошло (fetch отверг до ответа — иначе сюда не попадаем)
     return go().catch((e) => {
-      if (e && e.status !== undefined) throw e;                 // ответ сервера (parseReply) — не сетевая ошибка
-      return failover().then((ok) => (ok ? go().catch((e2) => { throw (e2 && e2.status !== undefined) ? e2 : netErr; }) : Promise.reject(netErr)));
+      const isNet = !(e && e.status !== undefined);              // fetch отверг до ответа
+      if (!isNet && !e.gateway) throw e;                         // ответ нашего API — не повод менять вход
+      return failover().then((ok) => (ok ? go().catch((e2) => { throw (e2 && e2.status !== undefined) ? e2 : netErr; }) : Promise.reject(isNet ? netErr : e)));
     });
   }
   // Загрузка клипа из приложения (§3.3 POST /montage/{id}/clips): тело — сами байты файла, не multipart.
