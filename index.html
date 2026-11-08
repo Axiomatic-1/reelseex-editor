@@ -6,7 +6,9 @@
 <meta name="color-scheme" content="light dark">
 <title>Reelseex</title>
 <script src="./config.js"></script>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!-- SDK Mini App — локальная копия (webapp/vendor): telegram.org из России без VPN не открывается, и без SDK
+     приложение не получало initData. Обновление: см. README «SDK Telegram». -->
+<script src="./vendor/telegram-web-app.js"></script>
 <style>
 /* Mini App бота Reelseex — одностраничное приложение (app.js), моки для демо (demo.js), настройки (config.js).
    Цвета — из темы Telegram (--tg-theme-*), запасные значения — для предпросмотра в браузере. */

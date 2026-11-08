@@ -8,6 +8,17 @@
   const CFG = window.REELSEEX || {};
   const tg = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData !== undefined) ? window.Telegram.WebApp : null;
   const inTelegram = !!(tg && tg.initData);
+  // Страницу открыл клиент Telegram (данные запуска в #tgWebApp… или мост WebView), но initData не получен —
+  // значит, SDK не отработал. В демо в этом случае не уходим: показываем экран ошибки (boot), иначе пользователь
+  // видит «готовый» ненастоящий монтаж и ждёт ролик, который никто не рендерил.
+  const launchedByTelegram = (() => {
+    try {
+      if (/tgWebApp(Data|Platform|Version)=/.test(String(location.hash || ""))) return true;
+      if (window.TelegramWebviewProxy) return true;
+      if (window.external && typeof window.external.notify === "function") return true;
+    } catch (e) { /* ignore */ }
+    return false;
+  })();
   const API = String(CFG.api || "").replace(/\/+$/, "");
   const DEMO = !API || !inTelegram;
   const BOT = String(CFG.bot || "Reelseex_bot").replace(/^@/, "");
@@ -1332,6 +1343,11 @@
   }
   async function boot() {
     initTelegram();
+    if (API && !inTelegram && launchedByTelegram) {
+      S.fatal = () => stateBox("⚠️", "Не получил данные Telegram", "Приложение открыто из Telegram, но данные входа не пришли (не отработал SDK). Закрой приложение и открой снова из чата с ботом.",
+        [h("button", {class: "act", onclick: () => location.reload()}, ["Перезагрузить"]), h("button", {class: "act", onclick: () => openBot()}, ["Открыть чат с ботом"])]);
+      render(); return;
+    }
     render();
     try { S.me = await api("/me"); }
     catch (e) {
