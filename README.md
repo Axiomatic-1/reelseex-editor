@@ -110,6 +110,8 @@ push, и печатает diff. Порядок деплоя целиком — `
 curl -sS https://telegram.org/js/telegram-web-app.js -o webapp/vendor/telegram-web-app.js && node --check webapp/vendor/telegram-web-app.js
 ```
 
-Если страница открыта клиентом Telegram (есть `#tgWebApp…` или мост WebView), а `initData` всё равно пуст, `boot()`
-показывает экран «Не получил данные Telegram» с кнопкой перезагрузки — в демо не уходит
+Если страница открыта клиентом Telegram (есть `#tgWebApp…` или мост WebView), а `initData` пуст — так Telegram
+открывает Mini App с reply-кнопки клавиатуры (`KeyboardButton.web_app`): в `#hash` только `tgWebAppVersion/Platform/
+ThemeParams`, без `tgWebAppData` (iOS 9.6, 2026-11-09). `boot()` показывает экран «Не получил данные Telegram» (открой
+кнопкой меню чата или inline-кнопкой; «Техническая информация» — имена параметров запуска) — в демо не уходит
 (`tests/test_webapp_spa.py::test_no_silent_demo_when_launched_by_telegram`).

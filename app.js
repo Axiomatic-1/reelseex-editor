@@ -1360,9 +1360,10 @@
   async function boot() {
     initTelegram();
     if (API && !inTelegram && launchedByTelegram) {
-      S.fatal = () => stateBox("⚠️", "Не получил данные Telegram", "Приложение открыто из Telegram, но данные входа не пришли (не отработал SDK). Закрой приложение и открой снова из чата с ботом.",
-        [h("button", {class: "act", onclick: () => location.reload()}, ["Перезагрузить"]), h("button", {class: "act", onclick: () => openBot()}, ["Открыть чат с ботом"]),
-         h("pre", {class: "diag"}, [launchDiag()])]);
+      // Так открывается Mini App с reply-кнопки клавиатуры чата: Telegram не передаёт tgWebAppData (iOS 9.6, 2026-11-09).
+      S.fatal = () => stateBox("⚠️", "Не получил данные Telegram", "Так бывает, когда приложение открыто кнопкой клавиатуры чата: в этом режиме Telegram не передаёт данные входа, и я не знаю, кто ты. Открой приложение кнопкой «Открыть» слева от поля ввода или кнопкой под сообщением бота.",
+        [h("button", {class: "act", onclick: () => openBot("app")}, ["Открыть чат с ботом"]),
+         h("details", {class: "diag"}, [h("summary", null, ["Техническая информация"]), h("pre", null, [launchDiag()])])]);
       render(); return;
     }
     render();
