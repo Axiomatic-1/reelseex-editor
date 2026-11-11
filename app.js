@@ -698,7 +698,7 @@
     root.appendChild(section("Стиль", h("div", {class: "chips", role: "group", "aria-label": "Стиль"}, keys.map((k) =>
       h("button", {class: "chip", "aria-pressed": String(mo.style === k), disabled: M.busy, onclick: () => { if (mo.style !== k) patchMontage(mo.id, {style: k}); }}, [styles[k]])))));
     // текст на экране
-    root.appendChild(section(null, row("Текст на экране", "Пословные субтитры и хук в начале", sw(mo.captions !== false, "Текст на экране", () => patchMontage(mo.id, {captions: mo.captions === false})))));
+    root.appendChild(section(null, row("Текст на экране", "Пословные субтитры и надпись", sw(mo.captions !== false, "Текст на экране", () => patchMontage(mo.id, {captions: mo.captions === false})))));
     if (low && clips.length) root.appendChild(h("p", {class: "warn", style: "text-align:center"}, ["Не хватает кредитов: " + mo.credits + " из " + mo.cost + ". ",
       h("button", {class: "lnk", onclick: () => { S.profile.packsOpen = true; go("profile"); }}, ["Пополнить"])]));
     root.appendChild(h("p", {class: "foot"}, [clips.length ? "Склейки лягут на ритм выбранного звука. Ролик — 9:16, до минуты." : "Настройки сохранятся — клипы можно добавить потом."]));
