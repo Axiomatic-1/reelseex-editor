@@ -1,5 +1,5 @@
 /* Mini App Reelseex — одностраничное приложение без сборки (docs/api-contract.md §4).
-   Вкладки: Монтаж · Звуки · Тренды · Радар · Профиль. Данные — API (§3) с заголовком Authorization: tma <initData>;
+   Вкладки: Монтаж · Звуки · Тренды · Радар · Профиль; замена героя в ролике — карточка на вкладке «Монтаж» (§3.7). Данные — API (§3) с заголовком Authorization: tma <initData>;
    без адреса API в config.js или вне Telegram — демо-режим на моках (demo.js). */
 (function () {
   "use strict";
@@ -56,9 +56,10 @@
   const PLATFORM = {yt: "▶️ Shorts", tt: "🎵 TikTok", ig: "📸 Reels", vk: "🟦 VK", file: "📎 Файл"};
   const HOURS = [7, 8, 9, 10, 12, 15, 18, 20, 22];
   const STATUS = {collecting: "собираю клипы", queued: "в очереди", running: "монтирую", done: "готов", error: "ошибка", cancelled: "отменён"};
-  const REASON = {montage: "монтаж", analysis: "разбор", script: "сценарий", welcome: "подарок на старт", stars: "пополнение ⭐", stars_refund: "возврат ⭐", refund: "возврат", grant: "начисление", admin: "начисление"};
+  const REASON = {swap: "замена героя", refund_swap: "возврат за замену", montage: "монтаж", analysis: "разбор", script: "сценарий", welcome: "подарок на старт", stars: "пополнение ⭐", stars_refund: "возврат ⭐", refund: "возврат", grant: "начисление", admin: "начисление"};
   const hasSecondary = !!(tg && tg.SecondaryButton && tg.isVersionAtLeast && tg.isVersionAtLeast("7.10"));
   const LIMITS = {clips: 10, total_s: 300, upload_mb: 200};   // запасные лимиты, пока сервер не прислал mo.limits
+  const SWAP_STATUS = {draft: "черновик", queued: "в очереди", running: "меняю героя", done: "готово", error: "ошибка", cancelled: "отменена"};
 
   // ---------- состояние ----------
   const S = {
@@ -70,6 +71,8 @@
     trends: {items: [], offset: 0, limit: 5, collecting: false, loading: false, loaded: false, hasMore: true, error: null, link: "", linkBusy: false},
     radar: {items: null, max: 30, loading: false, error: null, link: "", linkBusy: false},
     profile: {ledger: undefined, ledgerOpen: false, packsOpen: false, aboutDraft: null, savingAbout: false},
+    // замена героя (§3.7): cur — черновик или идущая замена; info — {enabled, price_per_s, limits}; up — {name, pct} идущей загрузки
+    swap: {cur: undefined, info: null, loading: false, error: null, list: null, text: "", link: "", busy: false, up: null, consent: false},
     cards: {}, timers: {}, renderPending: false
   };
 
@@ -233,7 +236,7 @@
     });
   }
   // Загрузка клипа из приложения (§3.3 POST /montage/{id}/clips): тело — сами байты файла, не multipart.
-  // XMLHttpRequest ради upload.onprogress; в демо — через api() (мок добавляет клип, прогресс рисуем сами).
+  // В демо — через api() (мок добавляет клип, прогресс рисуем сами); по-настоящему — кусками с докачкой (uploadChunked).
   function uploadClip(mid, file, onProgress) {
     const nm = encodeURIComponent(file.name || "clip.mp4");
     if (DEMO) {
@@ -241,19 +244,88 @@
       const t = setInterval(() => { p = Math.min(p + 0.3, 0.9); if (onProgress) onProgress(p); }, 120);
       return api("/montage/" + mid + "/clips?name=" + nm, {method: "POST", body: {name: file.name, size: file.size, type: file.type}}).finally(() => clearInterval(t));
     }
+    return uploadChunked(mid, file, nm, onProgress);
+  }
+  // Файл уходит кусками по CHUNK байт: POST /montage/{id}/uploads/{upid} (тело — кусок, Upload-Offset — его начало),
+  // в конце POST …/finish. Свернули Telegram или моргнула сеть — теряется один кусок, а не весь файл: спрашиваем у
+  // сервера, сколько уже лежит (GET …/uploads/{upid}), и продолжаем. upid — от имени, размера и даты файла, поэтому
+  // тот же файл, выбранный заново после перезапуска приложения, тоже докачивается, а не грузится сначала.
+  const CHUNK = 2 * 1024 * 1024;
+  async function uploadId(file) {
+    const key = [file.name, file.size, file.lastModified].join("|");
+    try {
+      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+      return Array.from(new Uint8Array(buf)).slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch (e) {
+      let out = "";
+      for (let i = 0; i < 32; i++) out += Math.floor(Math.random() * 16).toString(16);
+      return out;
+    }
+  }
+  function sendPart(url, blob, offset, onLoaded) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       const fail = (msg) => reject({status: 0, error: "network", message: msg});
-      xhr.open("POST", API + "/montage/" + mid + "/clips?name=" + nm);
+      xhr.open("POST", API + url);
+      xhr.timeout = 180000;
       xhr.setRequestHeader("Authorization", "tma " + tg.initData);
-      xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
-      xhr.upload.onprogress = (ev) => { if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total); };
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.setRequestHeader("Upload-Offset", String(offset));
+      xhr.upload.onprogress = (ev) => { if (onLoaded) onLoaded(ev.loaded); };
       xhr.onload = () => { try { resolve(parseReply(xhr.status, xhr.responseText)); } catch (e) { reject(e); } };
       xhr.onerror = () => fail("Нет связи с сервером");
       xhr.onabort = () => fail("Загрузка прервана");
       xhr.ontimeout = () => fail("Сервер долго не отвечает");
-      xhr.send(file);
+      xhr.send(blob);
     });
+  }
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Ждём, пока приложение снова на экране и есть сеть: в фоне iOS замораживает WebView, слать куски бесполезно.
+  function waitActive() {
+    const ok = () => !document.hidden && navigator.onLine !== false;
+    if (ok()) return Promise.resolve();
+    return new Promise((resolve) => {
+      const check = () => {
+        if (!ok()) return;
+        document.removeEventListener("visibilitychange", check); window.removeEventListener("online", check);
+        resolve();
+      };
+      document.addEventListener("visibilitychange", check); window.addEventListener("online", check);
+    });
+  }
+  async function uploadChunked(mid, file, nm, onProgress) {
+    const base = "/montage/" + mid + "/uploads/" + (await uploadId(file));
+    const report = (n) => { if (onProgress) onProgress(Math.min(n / file.size, 1)); };
+    let have = null, fails = 0, finishing = false;
+    for (;;) {
+      try {
+        if (have === null) have = (await api(base)).have;
+        report(have);
+        if (have >= file.size) {
+          finishing = true;
+          return await api(base + "/finish?size=" + file.size + "&name=" + nm, {method: "POST"});
+        }
+        const from = have;
+        const r = await sendPart(base, file.slice(from, Math.min(from + CHUNK, file.size)), from, (n) => report(from + n));
+        have = r.have; fails = 0;
+      } catch (e) {
+        if (e && e.error === "offset" && e.have !== undefined) {   // сервер помнит другое место — продолжаем с него
+          if (finishing && e.have === 0) {
+            // finish дошёл, а ответ потерялся: клип уже в монтаже — не грузим файл второй раз
+            const mo = await api("/montage/" + mid).catch(() => null);
+            if (mo && (mo.clips || []).some((c) => c.src === "app" && c.size === file.size)) return mo;
+          }
+          finishing = false; have = e.have;
+          if (++fails > 8) throw {status: 0, error: "network", message: "Загрузка не идёт — попробуй ещё раз"};
+          continue;
+        }
+        if (e && e.status) throw e;                                // ответ API: 413, 409 closed, 400 «не видео»…
+        if (!document.hidden && ++fails > 6) throw e;              // сеть: в фоне ждём сколько нужно, на экране — 6 попыток
+        have = null; finishing = false;
+        await pause(Math.min(500 * Math.pow(2, fails), 8000));
+        await waitActive();
+      }
+    }
   }
   // Ошибки по §2: 401 — экран «открой из Telegram», 402 — экран «не хватает кредитов», сеть — тост с «Повторить», остальное — тост.
   function handleError(e, retry) {
@@ -343,6 +415,8 @@
     let m;
     if ((m = /^m(\d+)$/.exec(p))) return {tab: "montage", montageId: Number(m[1])};
     if ((m = /^v(\d+)$/.exec(p))) return {tab: "trends", card: {type: "video", id: Number(m[1])}};
+    if ((m = /^x(\d+)$/.exec(p))) return {tab: "montage", card: {type: "swap", id: Number(m[1])}};
+    if (p === "x") return {tab: "montage", card: {type: "swap"}};
     const short = {m: "montage", s: "sounds", t: "trends", r: "radar", p: "profile"};
     if (short[p]) return {tab: short[p]};
     if (TAB_NAMES.includes(p)) return {tab: p};
@@ -405,6 +479,7 @@
       case "montage": return renderMontageCard(card);
       case "niche": return renderNicheCard(card);
       case "nocredits": return renderNoCredits(card);
+      case "swap": return renderSwapCard(card);
       default: return stateBox("🤷", "Такого экрана нет", null, [h("button", {class: "act", onclick: closeCard}, ["Назад"])]);
     }
   }
@@ -508,6 +583,8 @@
     else if (mo.status === "collecting") root.appendChild(renderEditor(mo));
     else root.appendChild(renderMontageState(mo, false));
     root.appendChild(renderHistory());
+    root.appendChild(section("Замена героя", [h("p", {class: "hint"}, ["Тот же ролик кадр в кадр и со звуком, но вместо героя — другое животное или персонаж с твоего фото."]),
+      h("button", {class: "act more", onclick: () => { haptic("impact"); openCard({type: "swap"}); }}, ["✨ Заменить героя в ролике"])]));
     // опросы: клипы приходят из чата — current раз в 4 с; рендер — раз в 3 с
     if (!mo || mo.status === "collecting") setPoll("current", () => loadCurrent(true), 4000);
     else if (mo.status === "queued" || mo.status === "running") setPoll("progress", () => pollMontage(mo.id), 3000);
@@ -988,6 +1065,211 @@
   }
 
   // ---------- Звуки ----------
+  // ---------- замена героя в ролике (§3.7) ----------
+  // Сырые байты файла в ручку (ролик или фото): не multipart, прогресс — по upload.onprogress. В демо — через api().
+  function sendRaw(path, file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open("POST", API + path);
+      x.setRequestHeader("Authorization", "tma " + tg.initData);
+      x.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      x.upload.onprogress = (ev) => { if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total); };
+      x.onload = () => { try { resolve(parseReply(x.status, x.responseText)); } catch (e) { reject(e); } };
+      x.onerror = () => reject({status: 0, error: "network", message: "Нет связи с сервером"});
+      x.send(file);
+    });
+  }
+  const swapVideoPicker = h("input", {type: "file", accept: "video/*,.mp4,.mov", hidden: true, tabindex: "-1", "aria-hidden": "true"});
+  const swapPhotoPicker = h("input", {type: "file", accept: "image/*,.jpg,.jpeg,.png,.heic", hidden: true, tabindex: "-1", "aria-hidden": "true"});
+  swapVideoPicker.addEventListener("change", () => { const f = swapVideoPicker.files && swapVideoPicker.files[0]; swapVideoPicker.value = ""; if (f) swapUpload("source", f); });
+  swapPhotoPicker.addEventListener("change", () => { const f = swapPhotoPicker.files && swapPhotoPicker.files[0]; swapPhotoPicker.value = ""; if (f) swapUpload("photo", f); });
+  document.body.appendChild(swapVideoPicker); document.body.appendChild(swapPhotoPicker);
+
+  const swapToggle = sw;      // переключатель из помощников: внутри функций ниже имя sw занято самой заменой
+  function swapOnScreen() { return !!(S.card && S.card.type === "swap"); }
+  function swapSet(sw) { S.swap.cur = sw; if (sw && S.me) S.me.credits = sw.credits; }
+  async function loadSwap(quiet) {
+    const W = S.swap;
+    if (!quiet) { W.loading = true; W.error = null; }
+    try {
+      const r = await api("/swap/current");
+      W.info = {enabled: !!r.enabled, price_per_s: r.price_per_s, limits: r.limits};
+      const was = W.cur;
+      // готовую или упавшую замену держим на экране, пока человек сам не начнёт новую
+      if (r.swap) swapSet(r.swap); else if (!(quiet && was && (was.status === "done" || was.status === "error"))) W.cur = null;
+      W.loading = false;
+    } catch (e) {
+      W.loading = false;
+      if (e.status === 401) { showAuth(); return; }
+      if (!quiet) W.error = e;
+    }
+    if (swapOnScreen()) render();
+  }
+  async function loadSwapById(id) {
+    const W = S.swap;
+    W.loading = true; W.error = null;
+    try {
+      const sw = await api("/swap/" + id);
+      if (!W.info) W.info = {enabled: true, price_per_s: sw.price_per_s, limits: sw.limits};
+      swapSet(sw);
+    } catch (e) { if (e.status === 401) { showAuth(); return; } W.error = e; }
+    W.loading = false;
+    if (swapOnScreen()) render();
+  }
+  async function pollSwap(id) {
+    try {
+      const sw = await api("/swap/" + id);
+      const was = S.swap.cur;
+      if (was && was.id === id) {
+        if (was.status !== sw.status && (sw.status === "done" || sw.status === "error")) { haptic(sw.status === "done" ? "success" : "error"); S.swap.list = null; }
+        swapSet(sw);
+      }
+    } catch (e) { if (e.status === 401) { showAuth(); return; } }
+    if (swapOnScreen()) render();
+  }
+  async function loadSwapList() {
+    S.swap.list = undefined;
+    try { S.swap.list = await api("/swaps?limit=10"); } catch (e) { S.swap.list = []; }
+    if (swapOnScreen()) render();
+  }
+  async function swapAct(fn) {
+    const W = S.swap;
+    if (W.busy) return;
+    W.busy = true; haptic("impact"); render();
+    try { await fn(); haptic("success"); } catch (e) { handleError(e); }
+    finally { W.busy = false; if (swapOnScreen()) render(); }
+  }
+  function swapNew() { return swapAct(async () => { S.swap.text = ""; S.swap.link = ""; S.swap.consent = false; swapSet(await api("/swap", {method: "POST"})); }); }
+  async function swapUpload(kind, file) {
+    const W = S.swap, sw = W.cur;
+    if (!sw || sw.status !== "draft" || W.busy) return;
+    const lim = (sw.limits || {}), mb = kind === "source" ? (lim.upload_mb || 200) : (lim.photo_mb || 15);
+    if (file.size > mb * 1024 * 1024) { toast("«" + shortName(file.name) + "» больше " + mb + " МБ"); return; }
+    const nm = encodeURIComponent(file.name || (kind === "source" ? "video.mp4" : "photo.jpg"));
+    W.busy = true; W.up = {name: file.name || "файл", pct: 0}; haptic("impact"); render();
+    const tick = (p) => { if (W.up) { W.up.pct = p; const bar = document.querySelector(".up.swap .bar i"); if (bar) bar.style.width = Math.round(p * 100) + "%"; } };
+    try {
+      let out;
+      if (DEMO) out = await (kind === "source" ? api("/swap/" + sw.id + "/source?name=" + nm, {method: "POST", body: {name: file.name, size: file.size, type: file.type}})
+        : api("/swap/" + sw.id + "/photo?name=" + nm, {method: "POST", body: {name: file.name, size: file.size, type: file.type}}));
+      else out = await sendRaw("/swap/" + sw.id + "/" + kind + "?name=" + nm, file, tick);
+      swapSet(out); if (kind === "photo") W.consent = false;
+      haptic("success");
+    } catch (e) { handleError(e, () => swapUpload(kind, file)); }
+    finally { W.busy = false; W.up = null; if (swapOnScreen()) render(); }
+  }
+  function swapLink() {
+    const W = S.swap, url = (W.link || "").trim();
+    if (!/^https?:\/\//i.test(url)) { toast("Нужна ссылка, начинающаяся с https://"); return; }
+    return swapAct(async () => { swapSet(await api("/swap/" + W.cur.id + "/source-link", {method: "POST", body: {url}})); W.link = ""; });
+  }
+  function swapSubject() {
+    const W = S.swap, text = (W.text || "").trim();
+    if (text.length < 2) { toast("Напиши, кого вставить: например, «капибара»"); return; }
+    return swapAct(async () => { swapSet(await api("/swap/" + W.cur.id + "/subject", {method: "POST", body: {text}})); W.consent = false; });
+  }
+  function swapGo() {
+    const W = S.swap, sw = W.cur;
+    if (sw.needs_consent && !W.consent) { haptic("warning"); toast("Подтверди, что на фото ты или у тебя есть разрешение этого человека"); return; }
+    return swapAct(async () => { const r = await api("/swap/" + sw.id + "/go", {method: "POST", body: {consent: !!W.consent}}); swapSet(r.swap); S.swap.list = null; });
+  }
+  async function swapCancel() {
+    const sw = S.swap.cur;
+    if (!(await confirmDialog("Отменить эту замену?"))) return;
+    return swapAct(async () => { await api("/swap/" + sw.id + "/cancel", {method: "POST"}); S.swap.cur = null; S.swap.list = null; });
+  }
+  function swapWho(sub) {
+    if (!sub) return "";
+    if (sub.mode === "name") return (sub.name_ru || sub.text || "животное") + " — фото в высоком разрешении подберу сам";
+    return sub.kind === "animal" ? "твоё фото: " + (sub.name_ru || "животное") + " — добавлю к нему фото этого вида в высоком разрешении"
+      : "твоё фото" + (sub.name_ru ? ": " + sub.name_ru : "") + " — работаю с этим снимком";
+  }
+  function renderSwapDraft(sw) {
+    const W = S.swap, box = h("div"), src = sw.source, sub = sw.subject, lim = sw.limits || {};
+    // 1. ролик
+    const srcKids = [];
+    if (src) srcKids.push(row((src.name ? shortName(src.name) : "ролик по ссылке"), mmss(src.duration) + (src.w && src.h ? " · " + src.w + "×" + src.h : ""),
+      h("button", {class: "act", disabled: W.busy, onclick: () => swapVideoPicker.click()}, ["Заменить"])));
+    else {
+      srcKids.push(h("p", {class: "hint"}, ["Ролик от " + Math.round(lim.min_s || 3) + " до " + Math.round(lim.max_s || 30) + " секунд с одним главным героем."]));
+      srcKids.push(h("div", {class: "chips"}, [h("button", {class: "act primary", disabled: W.busy, onclick: () => swapVideoPicker.click()}, ["➕ Выбрать видео"])]));
+      const input = keepInput(h("input", {type: "url", inputmode: "url", placeholder: "или ссылка на ролик", value: W.link || "", autocomplete: "off"}));
+      input.addEventListener("input", () => { W.link = input.value; });
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); swapLink(); } });
+      srcKids.push(h("div", {class: "field inline"}, [input, h("button", {class: "act", disabled: W.busy, onclick: swapLink}, [W.busy && !W.up ? "…" : "Скачать"])]));
+    }
+    box.appendChild(section("1. Ролик", srcKids));
+    // 2. кого вставить
+    const subKids = [];
+    if (sub) subKids.push(h("p", null, ["✅ " + swapWho(sub)]));
+    const who = keepInput(h("input", {type: "text", placeholder: "животное: капибара, енот, рыжий кот", value: W.text || "", maxlength: "80", autocomplete: "off"}));
+    who.addEventListener("input", () => { W.text = who.value; });
+    who.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); swapSubject(); } });
+    subKids.push(h("div", {class: "field inline"}, [who, h("button", {class: "act primary", disabled: W.busy, onclick: swapSubject}, ["Выбрать"])]));
+    subKids.push(h("div", {class: "chips", style: "margin-top:10px"}, [h("button", {class: "act", disabled: W.busy, onclick: () => swapPhotoPicker.click()}, ["📷 Или своё фото"])]));
+    subKids.push(h("p", {class: "hint"}, ["По названию нахожу настоящих животных. Человека, персонажа или предмет — только по фото."]));
+    if (sw.needs_consent) subKids.push(row("Это я или у меня есть разрешение", "на фото человек — без согласия не запускаю",
+      swapToggle(W.consent, "Согласие на использование внешности", () => { W.consent = !W.consent; haptic(); render(); })));
+    box.appendChild(section("2. Кого вставить", subKids));
+    if (W.up) box.appendChild(section("Загрузка", [h("div", {class: "up swap"}, [h("div", null, [shortName(W.up.name)]), h("div", {class: "bar"}, [h("i", {style: "width:" + Math.round((W.up.pct || 0) * 100) + "%"})])])]));
+    // цена
+    if (sw.cost !== null && sw.cost !== undefined) box.appendChild(section("Цена", [h("p", null, [plural(sw.cost, "кредит", "кредита", "кредитов") +
+      " = " + Math.ceil(src.duration - 1e-6) + " с × " + sw.price_per_s + " кр. за секунду. Если не получится — кредиты вернутся."]),
+      h("p", {class: "hint"}, ["Занимает 10–20 минут. Готовый ролик придёт в чат с ботом."])]));
+    setButtons({text: "✨ Заменить" + (sw.cost ? " · " + sw.cost + " кр." : ""), active: !!sw.can.go && !W.busy, onClick: swapGo},
+      {text: "Отмена", active: !W.busy, onClick: swapCancel});
+    return box;
+  }
+  function renderSwapState(sw) {
+    const box = h("div");
+    if (sw.status === "queued" || sw.status === "running") {
+      const p = sw.progress || {}, pct = p.total ? Math.round(100 * (p.done || 0) / p.total) : 0;
+      box.appendChild(stateBox("⏳", sw.status === "queued" ? "В очереди" : (p.title || "Меняю героя"),
+        (p.total ? "Шаг: " + (p.done || 0) + " из " + p.total + ". " : "") + "Это занимает 10–20 минут — можно закрыть приложение, ролик придёт в чат.", null));
+      if (p.total) box.appendChild(section(null, [h("div", {class: "up"}, [h("div", {class: "bar"}, [h("i", {style: "width:" + pct + "%"})])])]));
+      setPoll("swap", () => pollSwap(sw.id), 4000);
+    } else if (sw.status === "done") {
+      const r = sw.result || {};
+      box.appendChild(stateBox("✅", "Готово", "Ролик" + (r.who ? " с героем «" + r.who + "»" : "") + (r.duration ? " (" + mmss(r.duration) + ")" : "") + " отправил в чат с ботом.",
+        [h("button", {class: "act primary", onclick: () => openBot()}, ["Открыть чат"]), h("button", {class: "act", disabled: S.swap.busy, onclick: swapNew}, ["Новая замена"])]));
+    } else if (sw.status === "error") {
+      box.appendChild(stateBox("😕", "Не получилось", sw.error || "Что-то пошло не так. Кредиты вернул.",
+        [h("button", {class: "act primary", disabled: S.swap.busy, onclick: swapNew}, ["Попробовать ещё раз"])]));
+    } else {
+      box.appendChild(stateBox("🚫", "Замена отменена", null, [h("button", {class: "act primary", disabled: S.swap.busy, onclick: swapNew}, ["Новая замена"])]));
+    }
+    return box;
+  }
+  function renderSwapHistory() {
+    const W = S.swap;
+    if (W.list === null) { loadSwapList(); return h("div"); }
+    const past = (W.list || []).filter((x) => !(W.cur && x.id === W.cur.id));      // текущая замена уже показана выше
+    if (!past.length) return h("div");
+    return section("Прошлые замены", [h("div", null, past.map((x) => h("div", {class: "item static"}, [h("div", {class: "grow"}, [
+      h("div", {class: "t"}, [(x.subject && (x.subject.name_ru || x.subject.text)) || "замена #" + x.id]),
+      h("div", {class: "m"}, [(SWAP_STATUS[x.status] || x.status) + (x.source ? " · " + mmss(x.source.duration) : "") + (x.cost ? " · " + x.cost + " кр." : "") + " · " + ago(x.updated_at)])])])))]);
+  }
+  function renderSwapCard(card) {
+    const W = S.swap, root = h("div");
+    const head = (sub) => h("div", {class: "top"}, [h("div", null, [h("h1", null, ["Замена героя"]), h("div", {class: "sub"}, [sub])]), creditsBadge()]);
+    if (card.id && !card.loaded) { card.loaded = true; W.cur = undefined; loadSwapById(card.id); }
+    else if (W.cur === undefined && !W.loading && !W.error) loadSwap(false);
+    if (W.error) { root.appendChild(head("ошибка")); root.appendChild(errorBox(W.error, () => { W.error = null; W.cur = undefined; card.loaded = false; render(); })); return root; }
+    if (W.cur === undefined) { root.appendChild(head("загружаю…")); root.appendChild(skeleton(4)); return root; }
+    if (W.info && !W.info.enabled) { root.appendChild(head("скоро")); root.appendChild(stateBox("🛠", "Пока выключено", "Замена героя скоро появится.", null)); return root; }
+    const sw = W.cur;
+    if (!sw) {
+      const price = W.info ? W.info.price_per_s : null;
+      root.appendChild(head("новая"));
+      root.appendChild(stateBox("✨", "Заменю героя в ролике", "Пришли ролик и скажи, кого вставить, — получишь тот же ролик кадр в кадр и со звуком, но с другим героем." +
+        (price ? " Цена — " + price + " кр. за секунду ролика." : ""), [h("button", {class: "act primary", disabled: W.busy, onclick: swapNew}, ["Начать"])]));
+    } else if (sw.status === "draft") { root.appendChild(head("черновик")); root.appendChild(renderSwapDraft(sw)); }
+    else { root.appendChild(head(SWAP_STATUS[sw.status] || sw.status)); root.appendChild(renderSwapState(sw)); }
+    root.appendChild(renderSwapHistory());
+    return root;
+  }
+
+
   function renderSoundsTab() {
     const Z = S.sounds, root = h("div");
     root.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, ["Тренд-звуки"]), h("div", {class: "sub"}, ["под них сейчас снимают · ✅ знаю, как монтируют"])])]));

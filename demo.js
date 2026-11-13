@@ -497,6 +497,87 @@
     return {ok: true};
   });
 
+  // ---------- замена героя (§3.7): черновик → ролик → кого вставить → go → queued → running → done за ~6 с ----------
+  const SWAP_PRICE = 17, SWAP_LIMITS = {min_s: 3, max_s: 30, upload_mb: 200, photo_mb: 15};
+  const swaps = {};
+  let swapSeq = 0;
+  const SWAP_STAGES = [["refs", "Ищу фото персонажа", 1], ["keyframes", "Рисую опорные кадры", 3], ["video", "Генерирую видео", 2], ["assemble", "Собираю ролик", 1]];
+  function swapOut(x) {
+    const draft = x.status === "draft";
+    return {id: x.id, status: x.status, source: x.source, subject: x.subject,
+      cost: draft ? (x.source ? Math.ceil(x.source.duration) * SWAP_PRICE : null) : (x.charged || null),
+      credits: user.credits, price_per_s: SWAP_PRICE, limits: SWAP_LIMITS, needs_consent: !!(x.subject && x.subject.kind === "person"),
+      progress: (x.status === "queued" || x.status === "running") ? x.progress || null : null,
+      result: x.status === "done" ? {duration: x.source.duration, who: x.subject.name_ru || x.subject.text} : null,
+      error: x.status === "error" ? x.error : null, can: {go: draft && !!x.source && !!x.subject, cancel: draft},
+      created_at: x.created_at, updated_at: x.updated_at};
+  }
+  function getSwap(id) { const x = swaps[int(id)]; if (!x) throw err(404, "not_found", "Не нашёл — возможно, уже удалено."); return x; }
+  function draftSwap(id) { const x = getSwap(id); if (x.status !== "draft") throw err(409, "closed", "Эта замена уже запущена или закрыта."); return x; }
+  function currentSwap() { return Object.values(swaps).filter((x) => ["draft", "queued", "running"].includes(x.status)).sort((a, b) => b.id - a.id)[0] || null; }
+  function runSwap(x) {
+    x.status = "queued"; x.updated_at = iso(Date.now());
+    const steps = [];
+    SWAP_STAGES.forEach(([stage, title, total]) => { for (let d = 0; d <= total; d++) steps.push({stage, title, done: d, total}); });
+    steps.forEach((p, i) => setTimeout(() => { x.status = "running"; x.progress = p; x.updated_at = iso(Date.now()); }, 700 + i * 500));
+    setTimeout(() => { x.status = "done"; x.progress = null; x.updated_at = iso(Date.now()); }, 700 + steps.length * 500);
+  }
+  on("GET", /^\/swap\/current$/, () => { const c = currentSwap(); return {swap: c ? swapOut(c) : null, enabled: true, price_per_s: SWAP_PRICE, limits: SWAP_LIMITS}; });
+  on("POST", /^\/swap$/, () => {
+    let c = currentSwap();
+    if (!c) { c = swaps[++swapSeq] = {id: swapSeq, status: "draft", source: null, subject: null, charged: 0, created_at: iso(Date.now()), updated_at: iso(Date.now())}; }
+    return swapOut(c);
+  });
+  on("GET", /^\/swaps$/, (_, q) => Object.values(swaps).filter((x) => x.status !== "draft").sort((a, b) => b.id - a.id)
+    .slice(0, Math.max(1, int(q.get("limit") || 20))).map(swapOut));
+  on("GET", /^\/swap\/(\d+)$/, ([id]) => swapOut(getSwap(id)));
+  on("POST", /^\/swap\/(\d+)\/source$/, ([id], q, b) => {
+    const x = draftSwap(id);
+    if (b && b.type && !/^video\//.test(b.type)) throw err(400, "bad_request", "Это не видео — пришли файл mp4/mov.");
+    x.source = {name: (q.get("name") || (b && b.name) || "video.mp4").slice(0, 80), duration: 12, w: 1080, h: 1920};
+    x.updated_at = iso(Date.now());
+    return swapOut(x);
+  });
+  on("POST", /^\/swap\/(\d+)\/source-link$/, ([id], q, b) => {
+    const x = draftSwap(id);
+    if (!/^https?:\/\//i.test(String(b.url || ""))) throw err(400, "bad_request", "Это не ссылка — пришли адрес ролика целиком.");
+    x.source = {name: null, duration: 18, w: 1080, h: 1920}; x.updated_at = iso(Date.now());
+    return swapOut(x);
+  });
+  on("POST", /^\/swap\/(\d+)\/subject$/, ([id], q, b) => {
+    const x = draftSwap(id), text = String(b.text || "").trim();
+    if (text.length < 2) throw err(400, "bad_request", "Напиши, кого вставить: например, «капибара».");
+    if (/иван|мария|человек|шрек/i.test(text)) throw err(400, "bad_request", "По названию нахожу только настоящих животных. Для персонажа или предмета пришли фото.");
+    x.subject = {mode: "name", text, kind: "animal", name_ru: text.toLowerCase()}; x.updated_at = iso(Date.now());
+    return swapOut(x);
+  });
+  on("POST", /^\/swap\/(\d+)\/photo$/, ([id], q, b) => {
+    const x = draftSwap(id);
+    if (b && b.type && !/^image\//.test(b.type)) throw err(400, "bad_request", "Это не фото — пришли jpg или png.");
+    const person = /me|я|selfie|portrait/i.test((b && b.name) || "");          // в демо «человек» — по имени файла
+    x.subject = {mode: "photo", text: null, kind: person ? "person" : "animal", name_ru: person ? "человек" : "рыжий кот"};
+    x.updated_at = iso(Date.now());
+    return swapOut(x);
+  });
+  on("POST", /^\/swap\/(\d+)\/cancel$/, ([id]) => {
+    const x = getSwap(id);
+    if (x.status === "queued" || x.status === "running") throw err(409, "busy", "Замена уже идёт — отменить нельзя.");
+    if (x.status !== "draft") throw err(409, "closed", "Эта замена уже запущена или закрыта.");
+    x.status = "cancelled"; x.updated_at = iso(Date.now());
+    return {ok: true, swap: swapOut(x)};
+  });
+  on("POST", /^\/swap\/(\d+)\/go$/, ([id], q, b) => {
+    const x = draftSwap(id);
+    if (!x.source) throw err(400, "bad_request", "Сначала добавь ролик, в котором меняем героя.");
+    if (!x.subject) throw err(400, "bad_request", "Сначала выбери, кого вставить: напиши животное или пришли фото.");
+    if (x.subject.kind === "person" && !(b && b.consent)) throw err(400, "bad_request", "На фото человек. Подтверди, что это ты или что у тебя есть разрешение этого человека на использование его внешности.");
+    const cost = Math.ceil(x.source.duration) * SWAP_PRICE;
+    charge(cost, "swap", x.id);
+    x.charged = cost;
+    runSwap(x);
+    return {ok: true, swap: swapOut(x)};
+  });
+
   on("POST", /^\/pay\/invoice$/, (_, q, b) => {
     const p = PACKS.find((x) => x.credits === int(b.credits));
     if (!p) throw err(400, "bad_request", "Нет такого пакета");
@@ -525,5 +606,5 @@
     });
   }
 
-  root.REELSEEX_DEMO = {request, route, state: {user, sounds, montages, videos, radar, ledger}};
+  root.REELSEEX_DEMO = {request, route, state: {user, sounds, montages, videos, radar, ledger, swaps}};
 })(typeof window !== "undefined" ? window : globalThis);
