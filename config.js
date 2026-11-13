@@ -3,4 +3,4 @@
 // Cloudflare Tunnel …). Приложение берёт первый отвечающий /health и запоминает на сессию; при обрыве переключается.
 // Пусто — демо-режим: приложение работает на моках (demo.js), запросов в сеть нет.
 // bot — username бота без @: ссылки «открой чат с ботом».
-window.REELSEEX = {api: "https://cycles-word-eden-provisions.trycloudflare.com", apiAlt: ["https://macbook-air-nazir.tailda32ea.ts.net"], bot: "Reelseex_bot"};
+window.REELSEEX = {api: "https://macbook-air-nazir.tailda32ea.ts.net", apiAlt: [], bot: "Reelseex_bot"};
