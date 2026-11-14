@@ -48,7 +48,15 @@
   }
   const BOT = String(CFG.bot || "Reelseex_bot").replace(/^@/, "");
   const DEMO_API = window.REELSEEX_DEMO || null;
-  const TABS = [["montage", "🎬", "Монтаж"], ["sounds", "🎶", "Звуки"], ["trends", "🔥", "Тренды"], ["radar", "🎯", "Радар"], ["profile", "👤", "Профиль"]];
+  const TABS = [["montage", "montage", "Монтаж"], ["sounds", "sounds", "Звуки"], ["trends", "trends", "Тренды"], ["radar", "radar", "Радар"], ["profile", "profile", "Профиль"]];
+  // иконки таббара — свои SVG (обводка цветом текста), а не эмодзи: одинаковы на всех телефонах и красятся под тему
+  const ICONS = {
+    montage: '<rect x="3" y="5" width="18" height="14" rx="4"/><path d="M10.4 9.3v5.4l4.7-2.7z" fill="currentColor"/>',
+    sounds: '<path d="M9 18V6.2l10-2.2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
+    trends: '<path d="M12 3c1 3.5 5 5.2 5 10a5 5 0 0 1-10 0c0-2 .8-3.2 1.8-4.2.3 1.6 1 2.4 1.9 2.8C10.5 9 10.8 5.5 12 3z"/>',
+    radar: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.2"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/>',
+    profile: '<circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20c1-3.6 4-5.5 7.5-5.5s6.5 1.9 7.5 5.5"/>'
+  };
   const TAB_NAMES = TABS.map((t) => t[0]);
   const STYLE_ORDER = ["auto", "talking", "vlog", "sport", "aesthetic", "trend", "ad"];
   const MUSIC = [["trend", "Тренд"], ["library", "Бесплатная"], ["none", "Без музыки"]];
@@ -56,7 +64,9 @@
   const PLATFORM = {yt: "▶️ Shorts", tt: "🎵 TikTok", ig: "📸 Reels", vk: "🟦 VK", file: "📎 Файл"};
   const HOURS = [7, 8, 9, 10, 12, 15, 18, 20, 22];
   const STATUS = {collecting: "собираю клипы", queued: "в очереди", running: "монтирую", done: "готов", error: "ошибка", cancelled: "отменён"};
-  const REASON = {swap: "замена героя", refund_swap: "возврат за замену", montage: "монтаж", analysis: "разбор", script: "сценарий", welcome: "подарок на старт", stars: "пополнение ⭐", stars_refund: "возврат ⭐", refund: "возврат", grant: "начисление", admin: "начисление"};
+  const REASON = {swap: "замена героя", refund_swap: "возврат за замену", montage: "монтаж", refund_montage: "возврат за монтаж", analysis: "разбор", an: "разбор", refund_an: "возврат за разбор",
+    script: "сценарий", sc: "сценарий", refund_sc: "возврат за сценарий", welcome: "подарок на старт", bonus: "подарок", stars: "пополнение ⭐", stars_refund: "возврат ⭐", refund: "возврат",
+    grant: "начисление", admin: "начисление"};
   const hasSecondary = !!(tg && tg.SecondaryButton && tg.isVersionAtLeast && tg.isVersionAtLeast("7.10"));
   const LIMITS = {clips: 10, total_s: 300, upload_mb: 200};   // запасные лимиты, пока сервер не прислал mo.limits
   const SWAP_STATUS = {draft: "черновик", queued: "в очереди", running: "меняю героя", done: "готово", error: "ошибка", cancelled: "отменена"};
@@ -95,6 +105,14 @@
     if (children === null || children === undefined || children === false) return;
     if (Array.isArray(children)) { children.forEach((c) => append(el, c)); return; }
     el.appendChild(typeof children === "string" || typeof children === "number" ? document.createTextNode(String(children)) : children);
+  }
+  function icon(name) {
+    const span = h("span", {class: "ico", "aria-hidden": "true"});
+    span.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || "") + "</svg>";
+    return span;
+  }
+  function brandMark() {
+    return h("div", {class: "brand"}, [h("img", {src: "./assets/logo.svg", alt: "", width: 38, height: 38}), h("span", {class: "word"}, ["Reelsee", h("b", null, ["X"])])]);
   }
   function plural(n, a, b, c) { n = Number(n) || 0; const m = Math.abs(n) % 10, k = Math.abs(n) % 100; return n + " " + (m === 1 && k !== 11 ? a : m >= 2 && m <= 4 && (k < 10 || k >= 20) ? b : c); }
   function mmss(t) { t = Math.round(Number(t) || 0); const m = Math.floor(t / 60), s = t % 60; return m ? m + ":" + ("0" + s).slice(-2) : s + " с"; }
@@ -338,7 +356,7 @@
   }
   function showAuth() {
     stopPolls();
-    S.fatal = () => stateBox("🔒", "Открой приложение из Telegram", "Нажми кнопку «🎬 Открыть Reelseex» в чате с ботом — так я узнаю, кто ты.",
+    S.fatal = () => stateBox("🔒", "Открой приложение из Telegram", "Нажми «Открыть» слева от поля ввода в чате с ботом — так я узнаю, кто ты.",
       [h("button", {class: "act", onclick: () => openBot()}, ["Открыть чат с ботом"])]);
     render();
   }
@@ -355,7 +373,7 @@
           tg.MainButton.onClick(() => { if (BTN.main && BTN.main.active !== false) BTN.main.onClick(); });
           if (hasSecondary) tg.SecondaryButton.onClick(() => { if (BTN.secondary && BTN.secondary.active !== false) BTN.secondary.onClick(); });
         }
-        if (BTN.main) tg.MainButton.setParams({text: BTN.main.text.slice(0, 64), is_visible: true, is_active: BTN.main.active !== false});
+        if (BTN.main) tg.MainButton.setParams(Object.assign({text: BTN.main.text.slice(0, 64), is_visible: true, is_active: BTN.main.active !== false}, mainColors(BTN.main.active !== false)));
         else tg.MainButton.setParams({is_visible: false});
         if (hasSecondary) {
           if (BTN.secondary) tg.SecondaryButton.setParams({text: BTN.secondary.text.slice(0, 64), is_visible: true, is_active: BTN.secondary.active !== false, position: "left"});
@@ -370,6 +388,12 @@
     Array.from(view.querySelectorAll(".bottombar")).forEach((b) => b.remove());
     if (fallback.length) view.appendChild(h("div", {class: "bottombar"}, fallback.map((b, i) => h("button", {
       class: "bar-btn" + (b === BTN.main ? " primary" : ""), disabled: b.active === false, onclick: () => b.onClick()}, [b.text]))));
+  }
+  // фирменная главная кнопка: лайм с тёмным текстом; неактивная — приглушённая под тему
+  function mainColors(active) {
+    const light = themeName() === "light";
+    if (active) return {color: "#c8ff3d", text_color: "#0b0a14"};
+    return light ? {color: "#dcd9cf", text_color: "#6e6a85"} : {color: "#2a2740", text_color: "#9e9bb5"};
   }
   function mainProgress(on) { try { if (tg) { on ? tg.MainButton.showProgress(false) : tg.MainButton.hideProgress(); } } catch (e) { /* ignore */ } }
   function applyBack(fn) {
@@ -439,7 +463,7 @@
       view.appendChild(S.fatal());
     } else if (!S.me) {
       bar.hidden = true; document.body.classList.remove("tabs-on");
-      view.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, ["Reelseex"]), h("div", {class: "sub"}, ["загружаю…"])])]));
+      view.appendChild(h("div", {class: "top"}, [h("div", null, [brandMark(), h("div", {class: "sub"}, ["загружаю…"])])]));
       view.appendChild(skeleton(5));
     } else if (!S.me.onboarded) {
       bar.hidden = true; document.body.classList.remove("tabs-on");
@@ -459,8 +483,8 @@
   }
   function renderTabbar(bar) {
     bar.textContent = "";
-    TABS.forEach(([id, icon, label]) => bar.appendChild(h("button", {class: "tab", "aria-current": S.tab === id ? "page" : null, onclick: () => { haptic(); go(id); }},
-      [h("span", {class: "ico", "aria-hidden": "true"}, [icon]), h("span", {class: "lab"}, [label])])));
+    TABS.forEach(([id, ic, label]) => bar.appendChild(h("button", {class: "tab", "aria-current": S.tab === id ? "page" : null, onclick: () => { haptic(); go(id); }},
+      [icon(ic), h("span", {class: "lab"}, [label])])));
   }
   function renderTab(tab) {
     switch (tab) {
@@ -493,7 +517,9 @@
   function renderOnboarding() {
     const O = S.onb, me = S.me, root = h("div");
     const steps = ["Ниша", "О себе", "Площадки"];
-    root.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, [O.step === 0 ? "Привет! Я Reelseex" : steps[O.step]]),
+    if (O.step === 0) root.appendChild(h("div", {class: "hero"}, [h("img", {src: "./assets/logo.svg", alt: "", width: 92, height: 92}),
+      h("h1", null, ["Привет! Я Reelsee", h("b", null, ["X"])]), h("p", null, ["Собираю рилсы из твоих клипов под трендовый звук"])]));
+    else root.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, [steps[O.step]]),
       h("div", {class: "sub"}, ["шаг " + (O.step + 1) + " из 3 · " + steps[O.step]])])]));
     root.appendChild(h("div", {class: "dots", "aria-hidden": "true"}, steps.map((_, i) => h("span", {class: i <= O.step ? "on" : ""}))));
     if (O.step === 0) {
@@ -705,6 +731,8 @@
     } catch (e) { handleError(e, () => addFiles(files)); }
     finally { M.uploading = false; M.uploads = []; if (S.tab === "montage" && !S.card) render(); }
   }
+  // Купленные за звёзды кредиты (ими оплачивается замена героя) — часть общего баланса; сервер шлёт их в /me и в замене.
+  function paidCredits() { const me = S.me || {}; return Math.max(0, Math.min(Number(me.paid_credits) || 0, Number(me.credits) || 0)); }
   function creditsBadge() {
     const me = S.me, cost = me && me.prices ? me.prices.montage : null;
     return h("div", {class: "credits" + (cost !== null && me.credits < cost ? " low" : "")}, [h("b", null, [plural(me.credits, "кредит", "кредита", "кредитов")]), cost !== null ? "монтаж · " + cost + " кр." : ""]);
@@ -744,7 +772,7 @@
       ]));
     } else {
       root.appendChild(h("div", {class: "strip empty"}, [hint.replace(/\.$/, "")]));
-      root.appendChild(section(null, [M.uploads.length ? renderUploadRows() : null, h("div", {class: "acts", style: M.uploads.length ? null : "margin-top:0"}, [addBtn])]));
+      root.appendChild(section(null, [M.uploads.length ? renderUploadRows() : null, h("div", {class: "acts" + (M.uploads.length ? "" : " flush")}, [addBtn])]));
     }
     // пожелание
     const draft = M.wishDraft === null ? (mo.wish || "") : M.wishDraft;
@@ -1056,8 +1084,10 @@
   }
   function renderNoCredits(card) {
     const me = S.me, need = card.need, have = card.have !== undefined ? card.have : me.credits;
-    const text = need !== undefined ? "Нужно " + plural(need, "кредит", "кредита", "кредитов") + ", у тебя " + have + "." : (card.message || "Не хватает кредитов.");
-    const box = stateBox("💳", "Не хватает кредитов", text + " Пополнить можно за Telegram Stars — пакеты в профиле.", [
+    const text = card.paidOnly
+      ? "Замена героя оплачивается только купленными кредитами: нужно " + need + ", куплено " + have + ". Подаренные кредиты идут на монтаж, разбор и сценарий."
+      : need !== undefined ? "Нужно " + plural(need, "кредит", "кредита", "кредитов") + ", у тебя " + have + "." : (card.message || "Не хватает кредитов.");
+    const box = stateBox("💳", card.paidOnly ? "Нужны купленные кредиты" : "Не хватает кредитов", text + " Пополнить можно за Telegram Stars — пакеты в профиле.", [
       h("button", {class: "act primary", onclick: () => { S.profile.packsOpen = true; S.card = null; go("profile"); }}, ["Пополнить"]),
       h("button", {class: "act", onclick: closeCard}, ["Назад"])
     ]);
@@ -1087,7 +1117,7 @@
 
   const swapToggle = sw;      // переключатель из помощников: внутри функций ниже имя sw занято самой заменой
   function swapOnScreen() { return !!(S.card && S.card.type === "swap"); }
-  function swapSet(sw) { S.swap.cur = sw; if (sw && S.me) S.me.credits = sw.credits; }
+  function swapSet(sw) { S.swap.cur = sw; if (sw && S.me) { S.me.credits = sw.credits; if (sw.paid_credits !== undefined) S.me.paid_credits = sw.paid_credits; } }
   async function loadSwap(quiet) {
     const W = S.swap;
     if (!quiet) { W.loading = true; W.error = null; }
@@ -1171,7 +1201,15 @@
   function swapGo() {
     const W = S.swap, sw = W.cur;
     if (sw.needs_consent && !W.consent) { haptic("warning"); toast("Подтверди, что на фото ты или у тебя есть разрешение этого человека"); return; }
-    return swapAct(async () => { const r = await api("/swap/" + sw.id + "/go", {method: "POST", body: {consent: !!W.consent}}); swapSet(r.swap); S.swap.list = null; });
+    return swapAct(async () => {
+      let r;
+      try { r = await api("/swap/" + sw.id + "/go", {method: "POST", body: {consent: !!W.consent}}); }
+      catch (e) {
+        if (e && e.status === 402) { haptic("warning"); openCard({type: "nocredits", paidOnly: true, need: e.need !== undefined ? e.need : sw.cost, have: e.have !== undefined ? e.have : paidCredits(), back: () => openCard({type: "swap"})}); return; }
+        throw e;
+      }
+      swapSet(r.swap); S.swap.list = null;
+    });
   }
   async function swapCancel() {
     const sw = S.swap.cur;
@@ -1186,6 +1224,7 @@
   }
   function renderSwapDraft(sw) {
     const W = S.swap, box = h("div"), src = sw.source, sub = sw.subject, lim = sw.limits || {};
+    const paid = sw.paid_credits !== undefined ? sw.paid_credits : paidCredits();
     // 1. ролик
     const srcKids = [];
     if (src) srcKids.push(row((src.name ? shortName(src.name) : "ролик по ссылке"), mmss(src.duration) + (src.w && src.h ? " · " + src.w + "×" + src.h : ""),
@@ -1215,7 +1254,9 @@
     // цена
     if (sw.cost !== null && sw.cost !== undefined) box.appendChild(section("Цена", [h("p", null, [plural(sw.cost, "кредит", "кредита", "кредитов") +
       " = " + Math.ceil(src.duration - 1e-6) + " с × " + sw.price_per_s + " кр. за секунду. Если не получится — кредиты вернутся."]),
-      h("p", {class: "hint"}, ["Занимает 10–20 минут. Готовый ролик придёт в чат с ботом."])]));
+      h("p", {class: "hint"}, ["Занимает 10–20 минут. Готовый ролик придёт в чат с ботом."]),
+      h("p", {class: paid < sw.cost ? "warn" : "hint"}, ["Оплата только купленными кредитами: у тебя " + paid + ". Подаренные идут на монтаж, разбор и сценарий."]),
+      paid < sw.cost ? h("div", {class: "acts"}, [h("button", {class: "act primary", onclick: () => { S.profile.packsOpen = true; S.card = null; go("profile"); }}, ["⭐ Купить кредиты"])]) : null]));
     setButtons({text: "✨ Заменить" + (sw.cost ? " · " + sw.cost + " кр." : ""), active: !!sw.can.go && !W.busy, onClick: swapGo},
       {text: "Отмена", active: !W.busy, onClick: swapCancel});
     return box;
@@ -1262,7 +1303,7 @@
       const price = W.info ? W.info.price_per_s : null;
       root.appendChild(head("новая"));
       root.appendChild(stateBox("✨", "Заменю героя в ролике", "Пришли ролик и скажи, кого вставить, — получишь тот же ролик кадр в кадр и со звуком, но с другим героем." +
-        (price ? " Цена — " + price + " кр. за секунду ролика." : ""), [h("button", {class: "act primary", disabled: W.busy, onclick: swapNew}, ["Начать"])]));
+        (price ? " Цена — " + price + " кр. за секунду ролика, оплата только купленными кредитами." : ""), [h("button", {class: "act primary", disabled: W.busy, onclick: swapNew}, ["Начать"])]));
     } else if (sw.status === "draft") { root.appendChild(head("черновик")); root.appendChild(renderSwapDraft(sw)); }
     else { root.appendChild(head(SWAP_STATUS[sw.status] || sw.status)); root.appendChild(renderSwapState(sw)); }
     root.appendChild(renderSwapHistory());
@@ -1570,7 +1611,8 @@
     // кредиты
     const prices = me.prices || {};
     root.appendChild(section("Кредиты", [
-      h("div", {class: "row"}, [h("div", {class: "lbl"}, [h("span", {class: "bignum"}, [String(me.credits)]), h("small", null, ["разбор " + prices.analysis + " · сценарий " + prices.script + " · монтаж " + prices.montage + " кр."])]),
+      h("div", {class: "row"}, [h("div", {class: "lbl"}, [h("span", {class: "bignum"}, [String(me.credits)]), h("small", null, ["разбор " + prices.analysis + " · сценарий " + prices.script + " · монтаж " + prices.montage + " кр."]),
+        h("small", null, ["из них купленных: " + paidCredits() + " · только ими оплачивается замена героя"])]),
         h("button", {class: "act primary", onclick: () => { P.packsOpen = !P.packsOpen; haptic(); render(); }}, [P.packsOpen ? "Скрыть" : "⭐ Пополнить"])]),
       P.packsOpen ? renderPacks() : null,
       h("div", {class: "acts"}, [h("button", {class: "act", onclick: () => { P.ledgerOpen = !P.ledgerOpen; haptic(); if (P.ledgerOpen && P.ledger === undefined) loadLedger(); render(); }}, [P.ledgerOpen ? "Скрыть историю" : "История списаний"])]),
@@ -1678,14 +1720,34 @@
   }
 
   // ---------- запуск ----------
+  // Тема: в Telegram — по его цветовой схеме (data-theme на <html>), в браузере — по системной (CSS prefers-color-scheme);
+  // ?theme=dark|light — для предпросмотра. Шапку, фон и нижнюю панель Telegram красим в цвет фона приложения.
+  function themeName() {
+    let t = "";
+    try { t = new URLSearchParams(location.search).get("theme") || ""; } catch (e) { t = ""; }
+    if (t !== "dark" && t !== "light") {
+      try { t = inTelegram && tg && tg.colorScheme ? tg.colorScheme : ""; } catch (e) { t = ""; }
+    }
+    if (t !== "dark" && t !== "light") {
+      try { t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"; } catch (e) { t = "dark"; }
+    }
+    return t;
+  }
+  function applyTheme() {
+    const t = themeName(), bg = t === "light" ? "#f2f0e9" : "#0a0913";
+    document.documentElement.setAttribute("data-theme", t);
+    if (!tg) return;
+    try { tg.setHeaderColor(bg); tg.setBackgroundColor(bg); if (tg.setBottomBarColor) tg.setBottomBarColor(bg); }
+    catch (e) { try { tg.setHeaderColor("secondary_bg_color"); tg.setBackgroundColor("secondary_bg_color"); } catch (e2) { /* старый клиент */ } }
+  }
   function initTelegram() {
+    applyTheme();
     if (!tg) return;
     try {
       tg.ready(); tg.expand();
-      tg.setHeaderColor("secondary_bg_color"); tg.setBackgroundColor("secondary_bg_color");
-      if (tg.setBottomBarColor) tg.setBottomBarColor("secondary_bg_color");
+      applyTheme();
       if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
-      if (tg.onEvent) tg.onEvent("themeChanged", () => { try { tg.setHeaderColor("secondary_bg_color"); tg.setBackgroundColor("secondary_bg_color"); } catch (e) { /* ignore */ } });
+      if (tg.onEvent) tg.onEvent("themeChanged", () => { applyTheme(); render(); });
     } catch (e) { /* старый клиент */ }
   }
   // Диагностика запуска для экрана «Не получил данные Telegram»: только имена параметров и длины, без значений.

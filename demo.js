@@ -27,7 +27,7 @@
 
   // ---------- пользователь ----------
   const user = {
-    id: 100500, first_name: "Демо", username: "demo_user", onboarded: !q0.has("onboard"), credits: 15,
+    id: 100500, first_name: "Демо", username: "demo_user", onboarded: !q0.has("onboard"), credits: 15, paid_credits: 0,
     niche: {id: 2, slug: "fitness", title: "💪 Фитнес и ЗОЖ", custom: false},
     about: "Тренер, снимаю домашние тренировки без инвентаря", platforms: ["ig", "yt"],
     digest_hour: 10, alerts: true, tz_offset: 5, is_admin: !q0.has("user"), embed_trend: false
@@ -43,13 +43,19 @@
     {delta: 20, reason: "stars", ref: "demo_charge_1", at: daysAgo(5)},
     {delta: 10, reason: "welcome", ref: null, at: daysAgo(7)}
   ];
+  // два кошелька, как на сервере: замена героя — только из купленных; остальное сначала тратит подаренные
   function charge(n, reason, ref) {
-    if (user.credits < n) throw err(402, "no_credits", "Не хватает кредитов: нужно " + n + ", у тебя " + user.credits + ".", {need: n, have: user.credits});
+    if (reason === "swap") {
+      if (user.paid_credits < n) throw err(402, "no_credits", "Замена героя оплачивается только купленными кредитами: нужно " + n + ", куплено " + user.paid_credits + ".", {need: n, have: user.paid_credits});
+      user.paid_credits -= n;
+    } else if (user.credits < n) throw err(402, "no_credits", "Не хватает кредитов: нужно " + n + ", у тебя " + user.credits + ".", {need: n, have: user.credits});
     user.credits -= n;
+    user.paid_credits = Math.min(user.paid_credits, user.credits);
     ledger.unshift({delta: -n, reason, ref: ref == null ? null : String(ref), at: iso(Date.now())});
   }
   function grant(n, reason, ref) {
     user.credits += n;
+    if (reason === "stars" || reason === "refund_swap") user.paid_credits += n;
     ledger.unshift({delta: n, reason, ref: ref == null ? null : String(ref), at: iso(Date.now())});
   }
   function me() {
@@ -506,7 +512,7 @@
     const draft = x.status === "draft";
     return {id: x.id, status: x.status, source: x.source, subject: x.subject,
       cost: draft ? (x.source ? Math.ceil(x.source.duration) * SWAP_PRICE : null) : (x.charged || null),
-      credits: user.credits, price_per_s: SWAP_PRICE, limits: SWAP_LIMITS, needs_consent: !!(x.subject && x.subject.kind === "person"),
+      credits: user.credits, paid_credits: user.paid_credits, price_per_s: SWAP_PRICE, limits: SWAP_LIMITS, needs_consent: !!(x.subject && x.subject.kind === "person"),
       progress: (x.status === "queued" || x.status === "running") ? x.progress || null : null,
       result: x.status === "done" ? {duration: x.source.duration, who: x.subject.name_ru || x.subject.text} : null,
       error: x.status === "error" ? x.error : null, can: {go: draft && !!x.source && !!x.subject, cancel: draft},
