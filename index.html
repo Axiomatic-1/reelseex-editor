@@ -213,6 +213,10 @@ textarea::placeholder, input::placeholder { color: var(--hint); }
 .act.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; box-shadow: var(--glow); }
 .act.more { display: block; width: 100%; text-align: center; padding: 14px; margin-bottom: 12px; }
 .lnk { color: var(--link); font: inherit; font-size: inherit; display: inline; font-weight: 600; }
+.play { flex: none; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1;
+  background: var(--accent); color: var(--on-accent); box-shadow: var(--glow); transition: transform .1s; }
+.play.lg { width: 54px; height: 54px; font-size: 19px; }
+.play:active { transform: scale(.93); }
 .sw { position: relative; flex: none; width: 50px; height: 30px; border-radius: 15px; background: var(--chip); border: 1px solid var(--stroke); transition: background .18s, border-color .18s; }
 .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 12px; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
   transition: transform .18s cubic-bezier(.3, 1.4, .5, 1), background .18s; }

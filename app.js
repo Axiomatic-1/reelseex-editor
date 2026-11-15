@@ -151,6 +151,63 @@
     try { if (tg && tg.openTelegramLink) { tg.openTelegramLink(u); return; } } catch (e) { /* ниже */ }
     window.open(u, "_blank", "noopener");
   }
+
+  // Прослушивание трендового трека прямо в приложении — 30-секундное лицензионное превью из публичного каталога
+  // (iTunes Search API, при осечке Deezer). Сам трек мы не храним и пользователю не отдаём (docs/stage2-contracts.md):
+  // это размещённый правообладателем отрывок, играется из их CDN, не с нашего сервера. Один проигрыватель на приложение.
+  const SP = {audio: null, key: null, loading: null, url: {}, btns: {}};
+  function spText(k) { return SP.key === k ? "⏸" : SP.loading === k ? "…" : "▶"; }
+  function spPaint() {
+    Object.keys(SP.btns).forEach((k) => {
+      const b = SP.btns[k];
+      if (!b || !b.isConnected) { delete SP.btns[k]; return; }
+      b.textContent = spText(k);
+      b.setAttribute("aria-label", SP.key === k ? "Пауза" : "Слушать превью");
+    });
+  }
+  function spStop() {
+    const a = SP.audio; SP.key = null; SP.loading = null;
+    try { if (a) { a.onended = null; a.pause(); } } catch (e) { /* ignore */ }
+    spPaint();
+  }
+  async function spLookup(q) {
+    const term = encodeURIComponent(q);
+    try {   // iTunes: ссылка на превью стабильная, CORS «*», ключ не нужен
+      const r = await fetch("https://itunes.apple.com/search?country=RU&media=music&entity=song&limit=1&term=" + term, {cache: "force-cache"});
+      const d = await r.json(); const u = d.results && d.results[0] && d.results[0].previewUrl;
+      if (u) return u;
+    } catch (e) { /* пробуем Deezer */ }
+    try {
+      const r = await fetch("https://api.deezer.com/search?limit=1&q=" + term);
+      const d = await r.json(); const u = d.data && d.data[0] && d.data[0].preview;
+      if (u) return u;
+    } catch (e) { /* превью не нашли */ }
+    return null;
+  }
+  async function spToggle(key, title, artist, btn) {
+    if (btn) SP.btns[key] = btn;
+    haptic();
+    if (SP.key === key) { spStop(); return; }      // этот трек играет — стоп
+    spStop();                                       // играл другой — остановить
+    SP.loading = key; spPaint();
+    let url = SP.url[key];
+    if (!url) url = await spLookup(((artist || "") + " " + (title || "")).trim());
+    if (SP.loading !== key) return;                 // пока искали, нажали другой трек
+    SP.loading = null;
+    if (!url) { spPaint(); toast("Превью этого трека не нашлось"); return; }
+    SP.url[key] = url;
+    let a = SP.audio;
+    if (!a) { a = SP.audio = new Audio(); a.preload = "none"; }
+    a.onended = () => { if (SP.key === key) { SP.key = null; spPaint(); } };
+    a.src = url; SP.key = key; spPaint();
+    try { await a.play(); } catch (e) { if (SP.key === key) { SP.key = null; spPaint(); toast("Не удалось проиграть превью"); } }
+  }
+  function spButton(key, title, artist, big) {
+    const b = h("button", {class: "play" + (big ? " lg" : ""), "aria-label": "Слушать превью",
+      onclick: (e) => { e.stopPropagation(); spToggle(key, title, artist, b); }}, [spText(key)]);
+    SP.btns[key] = b;
+    return b;
+  }
   function confirmDialog(text) {
     return new Promise((resolve) => {
       try { if (tg && tg.showConfirm && tg.isVersionAtLeast && tg.isVersionAtLeast("6.2")) { tg.showConfirm(text, (ok) => resolve(!!ok)); return; } } catch (e) { /* ниже */ }
@@ -408,13 +465,13 @@
   // ---------- опросы ----------
   function setPoll(name, fn, ms) { clearTimeout(S.timers[name]); S.timers[name] = setTimeout(() => { delete S.timers[name]; if (document.visibilityState !== "hidden") fn(); }, ms); }
   function stopPolls() { Object.keys(S.timers).forEach((k) => clearTimeout(S.timers[k])); S.timers = {}; }
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") stopPolls(); else render(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { spStop(); stopPolls(); } else render(); });
 
   // ---------- навигация ----------
   function go(tab, card) {
     if (S.tab === tab && !card && !S.card) { window.scrollTo(0, 0); return; }
     S.scroll[S.tab + (S.card ? ":card" : "")] = window.scrollY;
-    S.tab = tab; S.card = card || null; S.montage.picker = null;
+    S.tab = tab; S.card = card || null; S.montage.picker = null; spStop();
     if (tab === "profile") S.profile.fresh = false;
     stopPolls();
     render();
@@ -422,11 +479,11 @@
   }
   function openCard(card) {
     if (card.type === "niche") S.profile.nicheDraft = undefined;   // иначе невыбранный вариант с прошлого раза висит «к сохранению»
-    S.scroll[S.tab] = window.scrollY; S.card = card; stopPolls(); render(); window.scrollTo(0, 0);
+    spStop(); S.scroll[S.tab] = window.scrollY; S.card = card; stopPolls(); render(); window.scrollTo(0, 0);
   }
   function closeCard() {
     const back = S.card && S.card.back;
-    S.card = null; stopPolls(); render();
+    spStop(); S.card = null; stopPolls(); render();
     if (typeof back === "function") back();
     window.scrollTo(0, S.scroll[S.tab] || 0);
   }
@@ -1317,9 +1374,13 @@
     if (!Z.items.length && !Z.loading && !Z.error && Z.hasMore) loadSounds();
     if (Z.error && !Z.items.length) { root.appendChild(errorBox(Z.error, () => { Z.error = null; loadSounds(); })); return root; }
     const list = h("div", {class: "list"});
-    Z.items.forEach((s, i) => list.appendChild(h("button", {class: "item", onclick: () => { haptic(); openCard({type: "sound", id: s.id}); }}, [
-      h("div", {class: "t"}, [(i + 1) + ". " + (TREND[s.trend] ? TREND[s.trend].slice(0, 2) + " " : "") + s.name + (s.ready ? " ✅" : "")]),
-      h("div", {class: "m"}, [[s.bpm ? s.bpm + " BPM" : null, s.charts && s.charts.length ? plural(s.charts.length, "чарт", "чарта", "чартов") : null, s.shorts].filter(Boolean).join(" · ")])
+    Z.items.forEach((s, i) => list.appendChild(h("div", {class: "item static"}, [
+      h("div", {class: "grow", role: "button", tabindex: "0", onclick: () => { haptic(); openCard({type: "sound", id: s.id}); },
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); haptic(); openCard({type: "sound", id: s.id}); } }}, [
+        h("div", {class: "t"}, [(i + 1) + ". " + (TREND[s.trend] ? TREND[s.trend].slice(0, 2) + " " : "") + s.name + (s.ready ? " ✅" : "")]),
+        h("div", {class: "m"}, [[s.bpm ? s.bpm + " BPM" : null, s.charts && s.charts.length ? plural(s.charts.length, "чарт", "чарта", "чартов") : null, s.shorts].filter(Boolean).join(" · ")])
+      ]),
+      spButton("sound:" + s.id, s.title || s.name, s.artist)
     ])));
     root.appendChild(list);
     if (Z.loading) root.appendChild(skeleton(3));
@@ -1353,7 +1414,8 @@
     if (s === null) return h("div", null, [h("div", {class: "top"}, [h("div", null, [h("h1", null, ["Звук"])])]), skeleton(4)]);
     if (s.__error) return errorBox(s.__error, () => { delete S.cards[key]; render(); });
     const root = h("div");
-    root.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, ["🎶 " + (s.title || s.name)]), h("div", {class: "sub"}, [s.artist || ""])])]));
+    root.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, ["🎶 " + (s.title || s.name)]), h("div", {class: "sub"}, [s.artist || "30-секундное превью"])]),
+      spButton("sound:" + s.id, s.title || s.name, s.artist, true)]));
     const facts = [];
     if (TREND[s.trend]) facts.push(h("div", {class: "fact"}, [TREND[s.trend] + (s.trend === "up" && s.rise ? " · +" + plural(s.rise, "место", "места", "мест") : "")]));
     if (s.bpm) facts.push(h("div", {class: "fact"}, ["🥁 " + s.bpm + " BPM"]));
