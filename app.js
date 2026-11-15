@@ -152,10 +152,13 @@
     window.open(u, "_blank", "noopener");
   }
 
-  // Прослушивание трендового трека прямо в приложении — 30-секундное лицензионное превью из публичного каталога
-  // (iTunes Search API, при осечке Deezer). Сам трек мы не храним и пользователю не отдаём (docs/stage2-contracts.md):
-  // это размещённый правообладателем отрывок, играется из их CDN, не с нашего сервера. Один проигрыватель на приложение.
-  const SP = {audio: null, key: null, loading: null, url: {}, btns: {}};
+  // Прослушивание трендового трека прямо в приложении — 30-секундное лицензионное превью из публичного каталога.
+  // Адрес отрывка ищет наш сервер (GET /sounds/{id}/preview): на iPhone система перехватывает обращения страницы к
+  // itunes.apple.com, а Deezer не пускает запросы из браузера — со страницы там не находился ни один трек. Сам трек
+  // мы не храним и пользователю не отдаём (docs/stage2-contracts.md): отрывок играет с CDN каталога.
+  const SP = {audio: null, key: null, loading: null, url: {}, btns: {}, unlocked: false};
+  // тишина 0,05 с: iOS разрешает звук только из касания, а адрес отрывка приходит позже — «открываем» плеер сразу
+  const SP_SILENCE = "data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YSADAACA" + "gICA".repeat(266) + "gA==";
   function spText(k) { return SP.key === k ? "⏸" : SP.loading === k ? "…" : "▶"; }
   function spPaint() {
     Object.keys(SP.btns).forEach((k) => {
@@ -170,37 +173,49 @@
     try { if (a) { a.onended = null; a.pause(); } } catch (e) { /* ignore */ }
     spPaint();
   }
-  async function spLookup(q) {
-    const term = encodeURIComponent(q);
-    try {   // iTunes: ссылка на превью стабильная, CORS «*», ключ не нужен
-      const r = await fetch("https://itunes.apple.com/search?country=RU&media=music&entity=song&limit=1&term=" + term, {cache: "force-cache"});
-      const d = await r.json(); const u = d.results && d.results[0] && d.results[0].previewUrl;
-      if (u) return u;
-    } catch (e) { /* пробуем Deezer */ }
-    try {
-      const r = await fetch("https://api.deezer.com/search?limit=1&q=" + term);
-      const d = await r.json(); const u = d.data && d.data[0] && d.data[0].preview;
-      if (u) return u;
-    } catch (e) { /* превью не нашли */ }
-    return null;
+  function spUnlock() {
+    let a = SP.audio;
+    if (!a) { a = SP.audio = new Audio(); a.preload = "auto"; }
+    if (SP.unlocked) return a;
+    SP.unlocked = true;
+    try { a.onended = null; a.src = SP_SILENCE; const p = a.play(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* ignore */ }
+    return a;
+  }
+  // → {url} | {url: null} (в каталогах нет) | {error: текст} (не достучались до сервера)
+  async function spLookup(key, q) {
+    const m = /^sound:(\d+)$/.exec(key);
+    if (m && !DEMO) {
+      try { const d = await api("/sounds/" + m[1] + "/preview"); return {url: (d && d.url) || null}; }
+      catch (e) { return {error: (e && e.status === 0) ? "Нет связи — превью не загрузилось" : "Не удалось получить превью, попробуй ещё раз"}; }
+    }
+    try {   // демо-режим в браузере: каталог напрямую
+      const r = await fetch("https://itunes.apple.com/search?country=RU&media=music&entity=song&limit=1&term=" + encodeURIComponent(q), {cache: "force-cache"});
+      const d = await r.json();
+      return {url: (d.results && d.results[0] && d.results[0].previewUrl) || null};
+    } catch (e) { return {url: null}; }
   }
   async function spToggle(key, title, artist, btn) {
     if (btn) SP.btns[key] = btn;
     haptic();
     if (SP.key === key) { spStop(); return; }      // этот трек играет — стоп
     spStop();                                       // играл другой — остановить
+    const a = spUnlock();                           // строго до первого await: пока действует касание
     SP.loading = key; spPaint();
     let url = SP.url[key];
-    if (!url) url = await spLookup(((artist || "") + " " + (title || "")).trim());
-    if (SP.loading !== key) return;                 // пока искали, нажали другой трек
+    if (!url) {
+      const res = await spLookup(key, ((artist || "") + " " + (title || "")).trim());
+      if (SP.loading !== key) return;               // пока искали, нажали другой трек
+      if (!res.url) { SP.loading = null; spPaint(); toast(res.error || "Превью этого трека не нашлось"); return; }
+      url = res.url;
+    }
     SP.loading = null;
-    if (!url) { spPaint(); toast("Превью этого трека не нашлось"); return; }
-    SP.url[key] = url;
-    let a = SP.audio;
-    if (!a) { a = SP.audio = new Audio(); a.preload = "none"; }
     a.onended = () => { if (SP.key === key) { SP.key = null; spPaint(); } };
-    a.src = url; SP.key = key; spPaint();
-    try { await a.play(); } catch (e) { if (SP.key === key) { SP.key = null; spPaint(); toast("Не удалось проиграть превью"); } }
+    a.onerror = () => { if (SP.key === key) { delete SP.url[key]; SP.key = null; spPaint(); toast("Не удалось проиграть превью"); } };
+    try { a.pause(); } catch (e) { /* ignore */ }
+    a.src = url; SP.url[key] = url; SP.key = key; spPaint();
+    try { await a.play(); } catch (e) {
+      if (SP.key === key && !(e && e.name === "AbortError")) { delete SP.url[key]; SP.key = null; spPaint(); toast("Не удалось проиграть превью"); }
+    }
   }
   function spButton(key, title, artist, big) {
     const b = h("button", {class: "play" + (big ? " lg" : ""), "aria-label": "Слушать превью",

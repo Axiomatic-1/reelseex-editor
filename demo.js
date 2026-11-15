@@ -314,6 +314,7 @@
     const items = sounds.slice(page * size, page * size + size).map(soundBrief);
     return {items, page, page_size: size, has_more: (page + 1) * size < sounds.length};
   });
+  on("GET", /^\/sounds\/(\d+)\/preview$/, () => ({url: null}));
   on("GET", /^\/sounds\/ranked$/, (_, q) => {
     const mo = montages[int(q.get("mid"))];
     const offset = Math.max(0, int(q.get("offset") || 0)), limit = Math.max(1, Math.min(50, int(q.get("limit") || 12)));
