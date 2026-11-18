@@ -62,7 +62,7 @@
     const radarCount = radar.length;
     return Object.assign({}, user, {
       prices: PRICES, radar_count: radarCount, embed_trend: user.is_admin ? !!user.embed_trend : null,
-      presets: PRESETS, platform_choices: PLATFORMS, support: "@reelseex_support", stars_packs: PACKS
+      presets: PRESETS, platform_choices: PLATFORMS, support: "@reelseex_support", stars_packs: PACKS, usdt_packs: [{credits: 100, usdt: "3.50"}, {credits: 300, usdt: "9.90"}, {credits: 1000, usdt: "29.90"}]
     });
   }
 
@@ -314,6 +314,12 @@
     const items = sounds.slice(page * size, page * size + size).map(soundBrief);
     return {items, page, page_size: size, has_more: (page + 1) * size < sounds.length};
   });
+  on("POST", /^\/pay\/usdt\/invoice$/, (_, q, body) => ({id: 1, status: "pending", credits: (body && body.credits) || 100, amount: "3.47", amount_units: 3470000, code: "RX7K2M9P",
+    address: "UQAYxW1a57aeA-ojYgLJrYpIRZU2ouKNDn-fo_3xGdeCt9Rz", network: "TON", asset: "USDT", expires_at: new Date(Date.now() + 3600e3).toISOString(),
+    links: {tonkeeper: "https://app.tonkeeper.com/transfer/demo", ton: "ton://transfer/demo"}}));
+  on("GET", /^\/pay\/usdt\/invoice\/(\d+)$/, ([id]) => ({id: Number(id), status: "pending", credits: 100, amount: "3.47", amount_units: 3470000, code: "RX7K2M9P",
+    address: "UQAYxW1a57aeA-ojYgLJrYpIRZU2ouKNDn-fo_3xGdeCt9Rz", network: "TON", asset: "USDT", expires_at: new Date(Date.now() + 3600e3).toISOString(),
+    links: {tonkeeper: "https://app.tonkeeper.com/transfer/demo", ton: "ton://transfer/demo"}}));
   on("GET", /^\/sounds\/(\d+)\/preview$/, () => ({url: null}));
   on("GET", /^\/sounds\/ranked$/, (_, q) => {
     const mo = montages[int(q.get("mid"))];

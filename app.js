@@ -65,7 +65,7 @@
   const HOURS = [7, 8, 9, 10, 12, 15, 18, 20, 22];
   const STATUS = {collecting: "собираю клипы", queued: "в очереди", running: "монтирую", done: "готов", error: "ошибка", cancelled: "отменён"};
   const REASON = {swap: "замена героя", refund_swap: "возврат за замену", montage: "монтаж", refund_montage: "возврат за монтаж", analysis: "разбор", an: "разбор", refund_an: "возврат за разбор",
-    script: "сценарий", sc: "сценарий", refund_sc: "возврат за сценарий", welcome: "подарок на старт", bonus: "подарок", stars: "пополнение ⭐", stars_refund: "возврат ⭐", refund: "возврат",
+    script: "сценарий", sc: "сценарий", refund_sc: "возврат за сценарий", welcome: "подарок на старт", bonus: "подарок", stars: "пополнение ⭐", usdt: "пополнение USDT", stars_refund: "возврат ⭐", refund: "возврат",
     grant: "начисление", admin: "начисление"};
   const hasSecondary = !!(tg && tg.SecondaryButton && tg.isVersionAtLeast && tg.isVersionAtLeast("7.10"));
   const LIMITS = {clips: 10, total_s: 300, upload_mb: 200};   // запасные лимиты, пока сервер не прислал mo.limits
@@ -80,7 +80,7 @@
     sounds: {items: [], page: 0, hasMore: true, loading: false, error: null},
     trends: {items: [], offset: 0, limit: 5, collecting: false, loading: false, loaded: false, hasMore: true, error: null, link: "", linkBusy: false},
     radar: {items: null, max: 30, loading: false, error: null, link: "", linkBusy: false},
-    profile: {ledger: undefined, ledgerOpen: false, packsOpen: false, aboutDraft: null, savingAbout: false},
+    profile: {ledger: undefined, ledgerOpen: false, packsOpen: false, aboutDraft: null, savingAbout: false, usdt: null, usdtBusy: false},
     // замена героя (§3.7): cur — черновик или идущая замена; info — {enabled, price_per_s, limits}; up — {name, pct} идущей загрузки
     swap: {cur: undefined, info: null, loading: false, error: null, list: null, text: "", link: "", busy: false, up: null, consent: false},
     cards: {}, timers: {}, renderPending: false
@@ -1159,7 +1159,7 @@
     const text = card.paidOnly
       ? "Замена героя оплачивается только купленными кредитами: нужно " + need + ", куплено " + have + ". Подаренные кредиты идут на монтаж, разбор и сценарий."
       : need !== undefined ? "Нужно " + plural(need, "кредит", "кредита", "кредитов") + ", у тебя " + have + "." : (card.message || "Не хватает кредитов.");
-    const box = stateBox("💳", card.paidOnly ? "Нужны купленные кредиты" : "Не хватает кредитов", text + " Пополнить можно за Telegram Stars — пакеты в профиле.", [
+    const box = stateBox("💳", card.paidOnly ? "Нужны купленные кредиты" : "Не хватает кредитов", text + " Пополнить можно звёздами Telegram или USDT — пакеты в профиле.", [
       h("button", {class: "act primary", onclick: () => { S.profile.packsOpen = true; S.card = null; go("profile"); }}, ["Пополнить"]),
       h("button", {class: "act", onclick: closeCard}, ["Назад"])
     ]);
@@ -1690,7 +1690,7 @@
     root.appendChild(section("Кредиты", [
       h("div", {class: "row"}, [h("div", {class: "lbl"}, [h("span", {class: "bignum"}, [String(me.credits)]), h("small", null, ["разбор " + prices.analysis + " · сценарий " + prices.script + " · монтаж " + prices.montage + " кр."]),
         h("small", null, ["из них купленных: " + paidCredits() + " · только ими оплачивается замена героя"])]),
-        h("button", {class: "act primary", onclick: () => { P.packsOpen = !P.packsOpen; haptic(); render(); }}, [P.packsOpen ? "Скрыть" : "⭐ Пополнить"])]),
+        h("button", {class: "act primary", onclick: () => { P.packsOpen = !P.packsOpen; haptic(); render(); }}, [P.packsOpen ? "Скрыть" : "Пополнить"])]),
       P.packsOpen ? renderPacks() : null,
       h("div", {class: "acts"}, [h("button", {class: "act", onclick: () => { P.ledgerOpen = !P.ledgerOpen; haptic(); if (P.ledgerOpen && P.ledger === undefined) loadLedger(); render(); }}, [P.ledgerOpen ? "Скрыть историю" : "История списаний"])]),
       P.ledgerOpen ? renderLedger() : null
@@ -1723,12 +1723,68 @@
     return root;
   }
   function renderPacks() {
-    const packs = S.me.stars_packs || [], P = S.profile;
-    if (!packs.length) return h("p", {class: "hint"}, ["Пакетов пока нет — напиши в поддержку."]);
-    return h("div", {class: "packs"}, packs.map((p) => h("button", {class: "pack", disabled: P.paying, onclick: () => buyPack(p)}, [
+    const packs = S.me.stars_packs || [], upacks = S.me.usdt_packs || [], P = S.profile;
+    if (P.usdt) return renderUsdtInvoice();
+    if (!packs.length && !upacks.length) return h("p", {class: "hint"}, ["Пакетов пока нет — напиши в поддержку."]);
+    const out = [];
+    if (packs.length) out.push(h("div", {class: "packs"}, packs.map((p) => h("button", {class: "pack", disabled: P.paying, onclick: () => buyPack(p)}, [
       h("b", null, [plural(p.credits, "кредит", "кредита", "кредитов")]), h("span", null, ["⭐ " + p.stars]),
       h("small", null, [Math.round((p.stars / p.credits) * 10) / 10 + " ⭐ за кредит"])
-    ])).concat([h("p", {class: "hint", style: "flex-basis:100%"}, ["Оплата звёздами Telegram. Кредиты начислю сразу после оплаты — сообщение придёт в чат."])]));
+    ])).concat([h("p", {class: "hint", style: "flex-basis:100%"}, ["Оплата звёздами Telegram. Кредиты начислю сразу после оплаты — сообщение придёт в чат."])])));
+    if (upacks.length) out.push(h("div", {class: "packs"}, upacks.map((p) => h("button", {class: "pack", disabled: P.usdtBusy, onclick: () => buyUsdt(p)}, [
+      h("b", null, [plural(p.credits, "кредит", "кредита", "кредитов")]), h("span", null, [p.usdt + " USDT"]),
+      h("small", null, [Math.round((Number(p.usdt) / p.credits) * 1000) / 1000 + " USDT за кредит"])
+    ])).concat([h("p", {class: "hint", style: "flex-basis:100%"}, ["Оплата USDT в сети TON — из Telegram Wallet, Tonkeeper или любого кошелька TON. Выгоднее звёзд."])])));
+    return h("div", null, out);
+  }
+  // Оплата USDT (TON): счёт с суммой и кодом, перевод делает сам пользователь в своём кошельке, сервер ловит его в блокчейне
+  function usdtStop() { const P = S.profile; if (P.usdtTimer) { clearInterval(P.usdtTimer); P.usdtTimer = null; } }
+  function usdtClose() { usdtStop(); S.profile.usdt = null; render(); }
+  function usdtRow(label, value, copyLabel) {
+    return h("div", {class: "row"}, [h("div", {class: "lbl"}, [h("small", null, [label]), h("b", {class: "mono"}, [value])]),
+      h("button", {class: "act", onclick: () => copyText(value)}, [copyLabel || "Скопировать"])]);
+  }
+  function renderUsdtInvoice() {
+    const inv = S.profile.usdt;
+    if (inv.status === "paid") return h("div", {class: "usdt"}, [h("p", {class: "ok"}, ["Оплата получена ✅ Начислил " + plural(inv.credits, "кредит", "кредита", "кредитов") + "."]),
+      h("div", {class: "acts"}, [h("button", {class: "act primary", onclick: usdtClose}, ["Готово"])])]);
+    if (inv.status === "expired") return h("div", {class: "usdt"}, [h("p", {class: "warn"}, ["Счёт истёк. Если ты уже перевёл деньги с кодом " + inv.code + " — они дойдут, кредиты начислю; иначе создай новый счёт."]),
+      h("div", {class: "acts"}, [h("button", {class: "act", onclick: usdtClose}, ["К пакетам"])])]);
+    const left = Math.max(0, Math.round((new Date(inv.expires_at).getTime() - Date.now()) / 60000));
+    return h("div", {class: "usdt"}, [
+      h("p", {class: "hint", style: "margin:0 0 6px"}, [plural(inv.credits, "кредит", "кредита", "кредитов") + " · переведи USDT в сети TON. Сумму и комментарий укажи точно как здесь — по ним я узнаю твой перевод."]),
+      usdtRow("Сумма, USDT", inv.amount),
+      usdtRow("Адрес (сеть TON)", inv.address),
+      usdtRow("Комментарий к переводу", inv.code),
+      h("div", {class: "acts"}, [
+        h("button", {class: "act primary", onclick: () => openLink(inv.links.tonkeeper)}, ["Открыть в Tonkeeper"]),
+        h("button", {class: "act", onclick: usdtClose}, ["Отмена"])]),
+      h("p", {class: "hint"}, [h("span", {class: "spin sm", "aria-hidden": "true"}), " Жду перевод · счёт действует ещё " + left + " мин. Обычно зачисление занимает до минуты после отправки. Если кошелёк не даёт добавить комментарий — хватит точной суммы."]),
+      h("p", {class: "hint"}, ["Только USDT и только сеть TON. Перевод в другой сети или другой монетой не дойдёт."])
+    ]);
+  }
+  async function usdtCheck() {
+    const P = S.profile, inv = P.usdt;
+    if (!inv || inv.status !== "pending") { usdtStop(); return; }
+    try {
+      const r = await api("/pay/usdt/invoice/" + inv.id);
+      if (!P.usdt || P.usdt.id !== r.id) return;
+      const was = P.usdt.status; P.usdt = r;
+      if (r.status !== "pending") usdtStop();
+      if (r.status === "paid" && was !== "paid") { haptic("success"); toast("Оплата получена — кредиты начислены"); reloadMe(); }
+      if (S.tab === "profile" && !S.card) render();
+    } catch (e) { /* сеть моргнула — спросим ещё раз */ }
+  }
+  async function buyUsdt(p) {
+    const P = S.profile;
+    if (P.usdtBusy) return;
+    P.usdtBusy = true; haptic("impact"); render();
+    try {
+      const r = await api("/pay/usdt/invoice", {method: "POST", body: {credits: p.credits}});
+      P.usdt = r; usdtStop();
+      if (!DEMO) P.usdtTimer = setInterval(usdtCheck, 7000);
+    } catch (e) { handleError(e); }
+    finally { P.usdtBusy = false; render(); }
   }
   async function buyPack(p) {
     const P = S.profile;
