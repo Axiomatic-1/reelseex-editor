@@ -522,8 +522,15 @@
       credits: user.credits, paid_credits: user.paid_credits, price_per_s: SWAP_PRICE, limits: SWAP_LIMITS, needs_consent: !!(x.subject && x.subject.kind === "person"),
       progress: (x.status === "queued" || x.status === "running") ? x.progress || null : null,
       result: x.status === "done" ? {duration: x.source.duration, who: x.subject.name_ru || x.subject.text} : null,
-      error: x.status === "error" ? x.error : null, can: {go: draft && !!x.source && !!x.subject, cancel: draft},
+      error: x.status === "error" ? x.error : null,
+      chunks: x.status === "done" ? swapChunks(x) : [], redo: x.redo || null,
+      can: {go: draft && !!x.source && !!x.subject, cancel: draft, redo: x.status === "done" && !(x.redo && x.redo.status === "running")},
       created_at: x.created_at, updated_at: x.updated_at};
+  }
+  function swapChunks(x) {
+    const d = x.source.duration, n = Math.max(1, Math.ceil(d / 8)), out = [];
+    for (let i = 0; i < n; i++) { const a = d * i / n, b = d * (i + 1) / n; out.push({index: i, start: Math.round(a * 100) / 100, end: Math.round(b * 100) / 100, cost: Math.ceil(b - a) * SWAP_PRICE}); }
+    return out;
   }
   function getSwap(id) { const x = swaps[int(id)]; if (!x) throw err(404, "not_found", "Не нашёл — возможно, уже удалено."); return x; }
   function draftSwap(id) { const x = getSwap(id); if (x.status !== "draft") throw err(409, "closed", "Эта замена уже запущена или закрыта."); return x; }
@@ -577,6 +584,16 @@
     if (x.status === "queued" || x.status === "running") throw err(409, "busy", "Замена уже идёт — отменить нельзя.");
     if (x.status !== "draft") throw err(409, "closed", "Эта замена уже запущена или закрыта.");
     x.status = "cancelled"; x.updated_at = iso(Date.now());
+    return {ok: true, swap: swapOut(x)};
+  });
+  on("POST", /^\/swap\/(\d+)\/redo$/, ([id], q, b) => {
+    const x = getSwap(id);
+    if (x.status !== "done") throw err(409, "closed", "Переделать кусок можно только у готового ролика.");
+    const c = swapChunks(x)[int(b && b.chunk)];
+    if (!c) throw err(400, "bad_request", "Такого куска в ролике нет.");
+    charge(c.cost, "swap", "redo:" + x.id);
+    x.redo = {id: 1, chunk: c.index, status: "running", cost: c.cost, progress: {stage: "video", title: "Генерирую видео", done: 0, total: 1}, error: null};
+    setTimeout(() => { x.redo = {id: 1, chunk: c.index, status: "done", cost: c.cost, progress: null, error: null}; }, 2500);
     return {ok: true, swap: swapOut(x)};
   });
   on("POST", /^\/swap\/(\d+)\/go$/, ([id], q, b) => {

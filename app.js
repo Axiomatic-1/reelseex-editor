@@ -1345,6 +1345,8 @@
       const r = sw.result || {};
       box.appendChild(stateBox("✅", "Готово", "Ролик" + (r.who ? " с героем «" + r.who + "»" : "") + (r.duration ? " (" + mmss(r.duration) + ")" : "") + " отправил в чат с ботом.",
         [h("button", {class: "act primary", onclick: () => openBot()}, ["Открыть чат"]), h("button", {class: "act", disabled: S.swap.busy, onclick: swapNew}, ["Новая замена"])]));
+      const redo = renderSwapRedo(sw);
+      if (redo) box.appendChild(redo);
     } else if (sw.status === "error") {
       box.appendChild(stateBox("😕", "Не получилось", sw.error || "Что-то пошло не так. Кредиты вернул.",
         [h("button", {class: "act primary", disabled: S.swap.busy, onclick: swapNew}, ["Попробовать ещё раз"])]));
@@ -1353,12 +1355,44 @@
     }
     return box;
   }
+  // Переделка одного куска готового ролика (§3.7a): платит только за секунды куска, остальной ролик не меняется
+  function renderSwapRedo(sw) {
+    const rd = sw.redo, chunks = sw.chunks || [], kids = [];
+    const active = rd && (rd.status === "queued" || rd.status === "running");
+    if (!active && !chunks.length && !(rd && rd.status === "error")) return null;
+    if (active) {
+      const p = rd.progress || {};
+      kids.push(h("p", null, [h("span", {class: "spin sm", "aria-hidden": "true"}), " Переделываю отрезок " + (rd.chunk + 1) + (p.title ? " · " + p.title.toLowerCase() : "") + ". Это 5–10 минут, новый ролик придёт в чат."]));
+      setPoll("swap", () => pollSwap(sw.id), 4000);
+    } else {
+      if (rd && rd.status === "error") kids.push(h("p", {class: "warn"}, [rd.error || "Не получилось переделать отрезок. Кредиты вернул."]));
+      if (rd && rd.status === "done") kids.push(h("p", {class: "hint"}, ["Отрезок " + (rd.chunk + 1) + " переделан — новый ролик в чате."]));
+      if (chunks.length) {
+        kids.push(h("p", {class: "hint", style: "margin:0 0 10px"}, ["Не понравился один момент? Переделаю только этот отрезок: остальной ролик и звук останутся как есть. Оплата — купленными кредитами, при неудаче верну."]));
+        kids.push(h("div", {class: "chips"}, chunks.map((c) => h("button", {class: "act", disabled: S.swap.busy || !sw.can.redo, onclick: () => swapRedo(sw, c)}, [mmss(c.start) + "–" + mmss(c.end) + " · " + c.cost + " кр."]))));
+      }
+    }
+    return section("Переделать отрезок", kids);
+  }
+  async function swapRedo(sw, c) {
+    const W = S.swap;
+    if (W.busy) return;
+    if (!(await confirmDialog("Переделать отрезок " + mmss(c.start) + "–" + mmss(c.end) + " за " + plural(c.cost, "кредит", "кредита", "кредитов") + "? Остальной ролик не изменится."))) return;
+    W.busy = true; haptic("impact"); render();
+    try {
+      const r = await api("/swap/" + sw.id + "/redo", {method: "POST", body: {chunk: c.index}});
+      swapSet(r.swap); toast("Переделываю — новый ролик придёт в чат");
+    } catch (e) {
+      if (e && e.status === 402) { haptic("warning"); openCard({type: "nocredits", paidOnly: true, need: e.need !== undefined ? e.need : c.cost, have: e.have !== undefined ? e.have : paidCredits(), back: () => openCard({type: "swap", id: sw.id})}); return; }
+      handleError(e);
+    } finally { W.busy = false; if (swapOnScreen()) render(); }
+  }
   function renderSwapHistory() {
     const W = S.swap;
     if (W.list === null) { loadSwapList(); return h("div"); }
     const past = (W.list || []).filter((x) => !(W.cur && x.id === W.cur.id));      // текущая замена уже показана выше
     if (!past.length) return h("div");
-    return section("Прошлые замены", [h("div", null, past.map((x) => h("div", {class: "item static"}, [h("div", {class: "grow"}, [
+    return section("Прошлые замены", [h("div", null, past.map((x) => h("div", {class: "item static"}, [x.can && x.can.redo ? h("button", {class: "act", style: "order:2", onclick: () => openCard({type: "swap", id: x.id})}, ["Переделать отрезок"]) : null, h("div", {class: "grow"}, [
       h("div", {class: "t"}, [(x.subject && (x.subject.name_ru || x.subject.text)) || "замена #" + x.id]),
       h("div", {class: "m"}, [(SWAP_STATUS[x.status] || x.status) + (x.source ? " · " + mmss(x.source.duration) : "") + (x.cost ? " · " + x.cost + " кр." : "") + " · " + ago(x.updated_at)])])])))]);
   }
