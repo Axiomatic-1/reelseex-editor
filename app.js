@@ -1323,10 +1323,26 @@
       swapToggle(W.consent, "Согласие на использование внешности", () => { W.consent = !W.consent; haptic(); render(); })));
     box.appendChild(section("2. Кого вставить", subKids));
     if (W.up) box.appendChild(section("Загрузка", [h("div", {class: "up swap"}, [h("div", null, [shortName(W.up.name)]), h("div", {class: "bar"}, [h("i", {style: "width:" + Math.round((W.up.pct || 0) * 100) + "%"})])])]));
+    // качество: точное (покадрово) или быстрое (дешевле, движение по смыслу)
+    if (sw.prices) {
+      const q = sw.quality || "pro", pick = (v) => async () => {
+        if (W.busy || q === v) return;
+        W.busy = true; haptic(); render();
+        try { swapSet(await api("/swap/" + sw.id + "/quality", {method: "POST", body: {quality: v}})); } catch (e) { handleError(e); }
+        finally { W.busy = false; if (swapOnScreen()) render(); }
+      };
+      box.appendChild(section("3. Качество", [
+        h("div", {class: "chips"}, [
+          h("button", {class: "chip", "aria-pressed": String(q === "pro"), disabled: W.busy, onclick: pick("pro")}, ["Точное · " + sw.prices.pro + " кр./с"]),
+          h("button", {class: "chip", "aria-pressed": String(q === "lite"), disabled: W.busy, onclick: pick("lite")}, ["Быстрое · " + sw.prices.lite + " кр./с"])]),
+        h("p", {class: "hint"}, [q === "lite"
+          ? "Быстрое: герой, место и звук те же, губы идут под оригинальную речь, но движения повторяются по смыслу, а не кадр в кадр. Готово за 5–10 минут."
+          : "Точное: тот же ролик кадр в кадр — движения, мимика и губы как в оригинале. Готово за 10–20 минут."])]));
+    }
     // цена
     if (sw.cost !== null && sw.cost !== undefined) box.appendChild(section("Цена", [h("p", null, [plural(sw.cost, "кредит", "кредита", "кредитов") +
       " = " + Math.ceil(src.duration - 1e-6) + " с × " + sw.price_per_s + " кр. за секунду. Если не получится — кредиты вернутся."]),
-      h("p", {class: "hint"}, ["Занимает 10–20 минут. Готовый ролик придёт в чат с ботом."]),
+      h("p", {class: "hint"}, ["Занимает " + (sw.quality === "lite" ? "5–10" : "10–20") + " минут. Готовый ролик придёт в чат с ботом."]),
       h("p", {class: paid < sw.cost ? "warn" : "hint"}, ["Оплата только купленными кредитами: у тебя " + paid + ". Подаренные идут на монтаж, разбор и сценарий."]),
       paid < sw.cost ? h("div", {class: "acts"}, [h("button", {class: "act primary", onclick: () => { S.profile.packsOpen = true; S.card = null; go("profile"); }}, ["⭐ Купить кредиты"])]) : null]));
     setButtons({text: "✨ Заменить" + (sw.cost ? " · " + sw.cost + " кр." : ""), active: !!sw.can.go && !W.busy, onClick: swapGo},

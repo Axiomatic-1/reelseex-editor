@@ -513,13 +513,15 @@
   // ---------- замена героя (§3.7): черновик → ролик → кого вставить → go → queued → running → done за ~6 с ----------
   const SWAP_PRICE = 17, SWAP_LIMITS = {min_s: 3, max_s: 30, upload_mb: 200, photo_mb: 15};
   const swaps = {};
+  const SWAP_PRICE_LITE = 6;
   let swapSeq = 0;
   const SWAP_STAGES = [["refs", "Ищу фото персонажа", 1], ["keyframes", "Рисую опорные кадры", 3], ["video", "Генерирую видео", 2], ["assemble", "Собираю ролик", 1]];
   function swapOut(x) {
     const draft = x.status === "draft";
-    return {id: x.id, status: x.status, source: x.source, subject: x.subject,
-      cost: draft ? (x.source ? Math.ceil(x.source.duration) * SWAP_PRICE : null) : (x.charged || null),
-      credits: user.credits, paid_credits: user.paid_credits, price_per_s: SWAP_PRICE, limits: SWAP_LIMITS, needs_consent: !!(x.subject && x.subject.kind === "person"),
+    const pps = x.quality === "lite" ? SWAP_PRICE_LITE : SWAP_PRICE;
+    return {id: x.id, status: x.status, quality: x.quality || "pro", prices: {pro: SWAP_PRICE, lite: SWAP_PRICE_LITE}, source: x.source, subject: x.subject,
+      cost: draft ? (x.source ? Math.ceil(x.source.duration) * pps : null) : (x.charged || null),
+      credits: user.credits, paid_credits: user.paid_credits, price_per_s: pps, limits: SWAP_LIMITS, needs_consent: !!(x.subject && x.subject.kind === "person"),
       progress: (x.status === "queued" || x.status === "running") ? x.progress || null : null,
       result: x.status === "done" ? {duration: x.source.duration, who: x.subject.name_ru || x.subject.text} : null,
       error: x.status === "error" ? x.error : null,
@@ -586,6 +588,12 @@
     x.status = "cancelled"; x.updated_at = iso(Date.now());
     return {ok: true, swap: swapOut(x)};
   });
+  on("POST", /^\/swap\/(\d+)\/quality$/, ([id], q, b) => {
+    const x = draftSwap(id);
+    if (!b || (b.quality !== "pro" && b.quality !== "lite")) throw err(400, "bad_request", "Неверный запрос: quality");
+    x.quality = b.quality; x.updated_at = iso(Date.now());
+    return swapOut(x);
+  });
   on("POST", /^\/swap\/(\d+)\/redo$/, ([id], q, b) => {
     const x = getSwap(id);
     if (x.status !== "done") throw err(409, "closed", "Переделать кусок можно только у готового ролика.");
@@ -601,7 +609,7 @@
     if (!x.source) throw err(400, "bad_request", "Сначала добавь ролик, в котором меняем героя.");
     if (!x.subject) throw err(400, "bad_request", "Сначала выбери, кого вставить: напиши животное или пришли фото.");
     if (x.subject.kind === "person" && !(b && b.consent)) throw err(400, "bad_request", "На фото человек. Подтверди, что это ты или что у тебя есть разрешение этого человека на использование его внешности.");
-    const cost = Math.ceil(x.source.duration) * SWAP_PRICE;
+    const cost = Math.ceil(x.source.duration) * (x.quality === "lite" ? SWAP_PRICE_LITE : SWAP_PRICE);
     charge(cost, "swap", x.id);
     x.charged = cost;
     runSwap(x);
