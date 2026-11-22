@@ -442,8 +442,10 @@
       try {
         if (!BTN.wired) {
           BTN.wired = true;
-          tg.MainButton.onClick(() => { if (BTN.main && BTN.main.active !== false) BTN.main.onClick(); });
-          if (hasSecondary) tg.SecondaryButton.onClick(() => { if (BTN.secondary && BTN.secondary.active !== false) BTN.secondary.onClick(); });
+          // кнопки Telegram живут вне страницы и фокус с поля не снимают, а render() при фокусе в поле откладывается:
+          // без dropFocus() «Дальше» после ввода текста меняла шаг, но экран не перерисовывался — кнопка «не нажималась»
+          tg.MainButton.onClick(() => { if (BTN.main && BTN.main.active !== false) { dropFocus(); BTN.main.onClick(); } });
+          if (hasSecondary) tg.SecondaryButton.onClick(() => { if (BTN.secondary && BTN.secondary.active !== false) { dropFocus(); BTN.secondary.onClick(); } });
         }
         if (BTN.main) tg.MainButton.setParams(Object.assign({text: BTN.main.text.slice(0, 64), is_visible: true, is_active: BTN.main.active !== false}, mainColors(BTN.main.active !== false)));
         else tg.MainButton.setParams({is_visible: false});
@@ -472,7 +474,7 @@
     BTN.back = fn || null;
     if (!tg || !tg.BackButton) return;
     try {
-      if (!BTN.backWired) { BTN.backWired = true; tg.BackButton.onClick(() => { if (BTN.back) BTN.back(); }); }
+      if (!BTN.backWired) { BTN.backWired = true; tg.BackButton.onClick(() => { if (BTN.back) { dropFocus(); BTN.back(); } }); }
       fn ? tg.BackButton.show() : tg.BackButton.hide();
     } catch (e) { /* ignore */ }
   }
@@ -579,6 +581,16 @@
       default: return stateBox("🤷", "Такого экрана нет", null, [h("button", {class: "act", onclick: closeCard}, ["Назад"])]);
     }
   }
+  // снять фокус с поля ввода перед действием человека, чтобы render() не отложился (см. начало render)
+  function dropFocus(except) {
+    const a = document.activeElement;
+    if (a && a !== except && /^(TEXTAREA|INPUT)$/.test(a.tagName) && a.dataset.keep === "1") { try { a.blur(); } catch (e) { /* ignore */ } }
+  }
+  // то же для нажатий на странице: на iOS касание кнопки фокус с поля не забирает
+  document.addEventListener("click", (ev) => {
+    const t = ev.target && ev.target.closest ? ev.target.closest("button, a, [role=button], .chip, .tab") : null;
+    if (t) dropFocus(t);
+  }, true);
   function keepInput(el) {
     el.dataset.keep = "1";
     el.addEventListener("blur", () => { if (S.renderPending) setTimeout(render, 120); });
