@@ -29,9 +29,10 @@
   function setApi(base) { API = base; try { sessionStorage.setItem("reelseex_api", base); } catch (e) { /* ignore */ } }
   const BOT = String(CFG.bot || "Reelseex_bot").replace(/^@/, "");
   const DEMO_API = window.REELSEEX_DEMO || null;
-  const TABS = [["montage", "montage", "Монтаж"], ["sounds", "sounds", "Звуки"], ["trends", "trends", "Тренды"], ["radar", "radar", "Радар"], ["profile", "profile", "Профиль"]];
+  const TABS = [["montage", "montage", "Монтаж"], ["generation", "generation", "Генерация"], ["sounds", "sounds", "Звуки"], ["trends", "trends", "Тренды"], ["radar", "radar", "Радар"], ["profile", "profile", "Профиль"]];
   // иконки таббара — свои SVG (обводка цветом текста), а не эмодзи: одинаковы на всех телефонах и красятся под тему
   const ICONS = {
+    generation: '<path d="M12 2.5l2.5 6.8 7 2.7-7 2.7-2.5 6.8-2.5-6.8-7-2.7 7-2.7L12 2.5zM19 2v4m-2-2h4"/>',
     montage: '<rect x="3" y="5" width="18" height="14" rx="4"/><path d="M10.4 9.3v5.4l4.7-2.7z" fill="currentColor"/>',
     sounds: '<path d="M9 18V6.2l10-2.2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
     trends: '<path d="M12 3c1 3.5 5 5.2 5 10a5 5 0 0 1-10 0c0-2 .8-3.2 1.8-4.2.3 1.6 1 2.4 1.9 2.8C10.5 9 10.8 5.5 12 3z"/>',
@@ -517,8 +518,8 @@
     let m;
     if ((m = /^m(\d+)$/.exec(p))) return {tab: "montage", montageId: Number(m[1])};
     if ((m = /^v(\d+)$/.exec(p))) return {tab: "trends", card: {type: "video", id: Number(m[1])}};
-    if ((m = /^x(\d+)$/.exec(p))) return {tab: "montage", card: {type: "swap", id: Number(m[1])}};
-    if (p === "x") return {tab: "montage", card: {type: "swap"}};
+    if ((m = /^x(\d+)$/.exec(p))) return {tab: "generation", card: {type: "swap", id: Number(m[1])}};
+    if (p === "x") return {tab: "generation"};
     const short = {m: "montage", s: "sounds", t: "trends", r: "radar", p: "profile"};
     if (short[p]) return {tab: short[p]};
     if (TAB_NAMES.includes(p)) return {tab: p};
@@ -567,6 +568,7 @@
   function renderTab(tab) {
     switch (tab) {
       case "montage": return renderMontageTab();
+      case "generation": return renderSwapCard();
       case "sounds": return renderSoundsTab();
       case "trends": return renderTrendsTab();
       case "radar": return renderRadarTab();
@@ -697,8 +699,6 @@
     else if (mo.status === "collecting") root.appendChild(renderEditor(mo));
     else root.appendChild(renderMontageState(mo, false));
     root.appendChild(renderHistory());
-    root.appendChild(section("Замена героя", [h("p", {class: "hint"}, ["Тот же ролик кадр в кадр и со звуком, но вместо героя — другое животное или персонаж с твоего фото."]),
-      h("button", {class: "act more", onclick: () => { haptic("impact"); openCard({type: "swap"}); }}, ["✨ Заменить героя в ролике"])]));
     // опросы: клипы приходят из чата — current раз в 4 с; рендер — раз в 3 с
     if (!mo || mo.status === "collecting") setPoll("current", () => loadCurrent(true), 4000);
     else if (mo.status === "queued" || mo.status === "running") setPoll("progress", () => pollMontage(mo.id), 3000);
@@ -1204,7 +1204,7 @@
   document.body.appendChild(swapVideoPicker); document.body.appendChild(swapPhotoPicker);
 
   const swapToggle = sw;      // переключатель из помощников: внутри функций ниже имя sw занято самой заменой
-  function swapOnScreen() { return !!(S.card && S.card.type === "swap"); }
+  function swapOnScreen() { return S.card ? S.card.type === "swap" : S.tab === "generation"; }
   function swapSet(sw) { S.swap.cur = sw; if (sw && S.me) { S.me.credits = sw.credits; if (sw.paid_credits !== undefined) S.me.paid_credits = sw.paid_credits; } }
   async function loadSwap(quiet) {
     const W = S.swap;
@@ -1228,9 +1228,11 @@
     W.loading = true; W.error = null;
     try {
       const sw = await api("/swap/" + id);
-      if (!W.info) W.info = {enabled: true, price_per_s: sw.price_per_s, limits: sw.limits};
-      swapSet(sw);
-    } catch (e) { if (e.status === 401) { showAuth(); return; } W.error = e; }
+      if (W.historyId === id) {
+        if (!W.info) W.info = {enabled: true, price_per_s: sw.price_per_s, limits: sw.limits};
+        swapSet(sw);
+      }
+    } catch (e) { if (e.status === 401) { showAuth(); return; } if (W.historyId === id) W.error = e; }
     W.loading = false;
     if (swapOnScreen()) render();
   }
@@ -1293,7 +1295,7 @@
       let r;
       try { r = await api("/swap/" + sw.id + "/go", {method: "POST", body: {consent: !!W.consent}}); }
       catch (e) {
-        if (e && e.status === 402) { haptic("warning"); openCard({type: "nocredits", paidOnly: true, need: e.need !== undefined ? e.need : sw.cost, have: e.have !== undefined ? e.have : paidCredits(), back: () => openCard({type: "swap"})}); return; }
+        if (e && e.status === 402) { haptic("warning"); openCard({type: "nocredits", paidOnly: true, need: e.need !== undefined ? e.need : sw.cost, have: e.have !== undefined ? e.have : paidCredits()}); return; }
         throw e;
       }
       swapSet(r.swap); S.swap.list = null;
@@ -1428,20 +1430,28 @@
       h("div", {class: "t"}, [(x.subject && (x.subject.name_ru || x.subject.text)) || "замена #" + x.id]),
       h("div", {class: "m"}, [(SWAP_STATUS[x.status] || x.status) + (x.source ? " · " + mmss(x.source.duration) : "") + (x.cost ? " · " + x.cost + " кр." : "") + " · " + ago(x.updated_at)])])])))]);
   }
-  function renderSwapCard(card) {
+  function renderSwapCard(card = {}) {
     const W = S.swap, root = h("div");
-    const head = (sub) => h("div", {class: "top"}, [h("div", null, [h("h1", null, ["Замена героя"]), h("div", {class: "sub"}, [sub])]), creditsBadge()]);
-    if (card.id && !card.loaded) { card.loaded = true; W.cur = undefined; loadSwapById(card.id); }
+    const head = (sub) => h("div", {class: "top generation-top"}, [h("div", null, [h("h1", null, ["Генерация"]), sub ? h("div", {class: "sub"}, [sub]) : null]), creditsBadge()]);
+    if (!card.id && W.historyId) {
+      W.historyId = null; W.cur = undefined; W.error = null;
+    }
+    if (card.id && !card.loaded) {
+      card.loaded = true; W.historyId = card.id; W.cur = undefined; loadSwapById(card.id);
+    }
     else if (W.cur === undefined && !W.loading && !W.error) loadSwap(false);
     if (W.error) { root.appendChild(head("ошибка")); root.appendChild(errorBox(W.error, () => { W.error = null; W.cur = undefined; card.loaded = false; render(); })); return root; }
     if (W.cur === undefined) { root.appendChild(head("загружаю…")); root.appendChild(skeleton(4)); return root; }
     if (W.info && !W.info.enabled) { root.appendChild(head("скоро")); root.appendChild(stateBox("🛠", "Пока выключено", "Замена героя скоро появится.", null)); return root; }
     const sw = W.cur;
     if (!sw) {
-      const price = W.info ? W.info.price_per_s : null;
-      root.appendChild(head("новая"));
-      root.appendChild(stateBox("✨", "Заменю героя в ролике", "Пришли ролик и скажи, кого вставить, — получишь тот же ролик кадр в кадр и со звуком, но с другим героем." +
-        (price ? " Цена — " + price + " кр. за секунду ролика, оплата только купленными кредитами." : ""), [h("button", {class: "act primary", disabled: W.busy, onclick: swapNew}, ["Начать"])]));
+      root.appendChild(head());
+      root.appendChild(h("section", {class: "generation-intro"}, [
+        icon("generation"),
+        h("h2", null, ["Замени героя в видео"]),
+        h("p", null, ["Добавь ролик и опиши нового героя или загрузи его фото. Результат сохранит звук исходного видео."]),
+        h("button", {class: "act primary", disabled: W.busy, onclick: swapNew}, ["Создать видео"])
+      ]));
     } else if (sw.status === "draft") { root.appendChild(head("черновик")); root.appendChild(renderSwapDraft(sw)); }
     else { root.appendChild(head(SWAP_STATUS[sw.status] || sw.status)); root.appendChild(renderSwapState(sw)); }
     root.appendChild(renderSwapHistory());
