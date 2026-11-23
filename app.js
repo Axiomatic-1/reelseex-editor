@@ -20,32 +20,13 @@
     return false;
   })();
   // Несколько входов в один API (config.js: api + apiAlt): Funnel из-за VPN/провайдера может не открываться там, где
-  // открывается Cloudflare Tunnel, и наоборот. Берём первый отвечающий (/health) и помним выбор на сессию.
-  const API_LIST = [CFG.api].concat(Array.isArray(CFG.apiAlt) ? CFG.apiAlt : []).map((u) => String(u || "").replace(/\/+$/, "")).filter(Boolean);
+  // открывается запасной вход. Запоминаем вход после успешного запроса к API.
+  const API_LIST = Array.from(new Set([CFG.api].concat(Array.isArray(CFG.apiAlt) ? CFG.apiAlt : [])
+    .map((u) => String(u || "").replace(/\/+$/, "")).filter(Boolean)));
   let API = API_LIST[0] || "";
   try { const saved = sessionStorage.getItem("reelseex_api"); if (saved && API_LIST.indexOf(saved) >= 0) API = saved; } catch (e) { /* ignore */ }
   const DEMO = !API || !inTelegram;
   function setApi(base) { API = base; try { sessionStorage.setItem("reelseex_api", base); } catch (e) { /* ignore */ } }
-  function health(base, ms) {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), ms);
-    return fetch(base + "/health", {cache: "no-store", signal: ac.signal}).then((r) => r.ok).catch(() => false).finally(() => clearTimeout(timer));
-  }
-  let failoverP = null;
-  // Текущий вход не отвечает — пробуем остальные по очереди (6 с каждый). true — переключились.
-  function failover() {
-    if (API_LIST.length < 2) return Promise.resolve(false);
-    if (!failoverP) {
-      failoverP = (async () => {
-        for (const base of API_LIST) {
-          if (base === API) continue;
-          if (await health(base, 6000)) { setApi(base); return true; }
-        }
-        return false;
-      })().finally(() => { failoverP = null; });
-    }
-    return failoverP;
-  }
   const BOT = String(CFG.bot || "Reelseex_bot").replace(/^@/, "");
   const DEMO_API = window.REELSEEX_DEMO || null;
   const TABS = [["montage", "montage", "Монтаж"], ["sounds", "sounds", "Звуки"], ["trends", "trends", "Тренды"], ["radar", "radar", "Радар"], ["profile", "profile", "Профиль"]];
@@ -299,13 +280,36 @@
     if (status >= 200 && status < 300) return data;
     const d = data && typeof data === "object" ? data : {};
     const e = {status, error: d.error || "error", message: d.message || httpMessage(status)};
-    // 5xx без JSON — ответил не наш API, а вход перед ним (Cloudflare 530 «туннель не подключён», шлюз): повод сменить вход
-    if (status >= 500 && data === null) e.gateway = true;
+    if ([502, 503, 504].includes(status) || (status >= 500 && data === null)) e.gateway = true;
     if (d.need !== undefined) e.need = d.need;
     if (d.have !== undefined) e.have = d.have;
     throw e;
   }
-  function api(path, opts) {
+  async function readApi(path, init, timeout) {
+    const bases = [API].concat(API_LIST.filter((base) => base !== API));
+    const deadline = performance.now() + timeout;
+    const netError = {status: 0, error: "network", message: "Сервер не ответил. Проверь соединение и повтори."};
+    for (const [index, base] of bases.entries()) {
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) break;
+      const controller = new AbortController();
+      // Оставляем время запасным входам, даже если первый завис на CORS, TLS или чтении тела.
+      const timer = setTimeout(() => controller.abort(), remaining / (bases.length - index));
+      try {
+        const reply = await fetch(base + path, {...init, cache: "no-store", signal: controller.signal});
+        const data = parseReply(reply.status, await reply.text());
+        if (path === "/me" && (!data || typeof data.onboarded !== "boolean")) continue;
+        if (base !== API) setApi(base);
+        return data;
+      } catch (e) {
+        if (e && e.status !== undefined && !e.gateway) throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw netError;
+  }
+  async function api(path, opts) {
     opts = opts || {};
     const method = opts.method || "GET";
     if (DEMO) {
@@ -315,15 +319,15 @@
     const headers = {Authorization: "tma " + tg.initData};
     const init = {method, headers};
     if (opts.body !== undefined) { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(opts.body); }
-    const netErr = {status: 0, error: "network", message: "Нет связи с сервером"};
-    const go = () => fetch(API + path, init).then((r) => r.text().then((txt) => parseReply(r.status, txt)));
-    // сеть упала — один раз пробуем другой вход (api/apiAlt) и повторяем запрос; GET/DELETE идемпотентны, POST/PATCH
-    // повторяем только если до сервера точно не дошло (fetch отверг до ответа — иначе сюда не попадаем)
-    return go().catch((e) => {
-      const isNet = !(e && e.status !== undefined);              // fetch отверг до ответа
-      if (!isNet && !e.gateway) throw e;                         // ответ нашего API — не повод менять вход
-      return failover().then((ok) => (ok ? go().catch((e2) => { throw (e2 && e2.status !== undefined) ? e2 : netErr; }) : Promise.reject(isNet ? netErr : e)));
-    });
+    if (method === "GET") return readApi(path, init, opts.timeout || 16000);
+    // При потере ответа исход операции неизвестен. Повтор может создать второй заказ или списание.
+    try {
+      const reply = await fetch(API + path, init);
+      return parseReply(reply.status, await reply.text());
+    } catch (e) {
+      if (e && e.status !== undefined && !e.gateway) throw e;
+      throw {status: 0, error: "network", message: "Связь прервалась. Обнови экран и проверь, выполнилось ли действие."};
+    }
   }
   // Загрузка клипа из приложения (§3.3 POST /montage/{id}/clips): тело — сами байты файла, не multipart.
   // В демо — через api() (мок добавляет клип, прогресс рисуем сами); по-настоящему — кусками с докачкой (uploadChunked).
@@ -1971,7 +1975,7 @@
       render(); return;
     }
     render();
-    try { S.me = await api("/me"); }
+    try { S.me = await api("/me", {timeout: 10000}); }
     catch (e) {
       if (e.status === 401) { showAuth(); return; }
       S.fatal = () => errorBox(e, () => { S.fatal = null; boot(); });
@@ -1983,12 +1987,12 @@
       S.tab = r.tab;
       if (r.card) S.card = r.card;
       if (r.montageId) {
-        try { const c = await api("/montage/current"); S.montage.cur = c && c.montage ? c.montage : null; } catch (e) { S.montage.cur = undefined; }
+        try { const c = await api("/montage/current", {timeout: 5000}); S.montage.cur = c && c.montage ? c.montage : null; } catch (e) { S.montage.cur = undefined; }
         if (!(S.montage.cur && S.montage.cur.id === r.montageId)) S.card = {type: "montage", id: r.montageId};
       }
       render(); return;
     }
-    try { const c = await api("/montage/current"); S.montage.cur = c && c.montage ? c.montage : null; } catch (e) { S.montage.cur = undefined; }
+    try { const c = await api("/montage/current", {timeout: 5000}); S.montage.cur = c && c.montage ? c.montage : null; } catch (e) { S.montage.cur = undefined; }
     S.tab = S.montage.cur ? "montage" : "trends";
     render();
   }
