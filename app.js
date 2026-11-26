@@ -48,7 +48,7 @@
   const STATUS = {collecting: "собираю клипы", queued: "в очереди", running: "монтирую", done: "готов", error: "ошибка", cancelled: "отменён"};
   const REASON = {swap: "замена героя", refund_swap: "возврат за замену", montage: "монтаж", refund_montage: "возврат за монтаж", analysis: "разбор", an: "разбор", refund_an: "возврат за разбор",
     script: "сценарий", sc: "сценарий", refund_sc: "возврат за сценарий", welcome: "подарок на старт", bonus: "подарок", stars: "пополнение ⭐", usdt: "пополнение USDT", stars_refund: "возврат ⭐", refund: "возврат",
-    grant: "начисление", admin: "начисление"};
+    grant: "начисление", admin: "начисление", project_transfer: "перевод из подарочных", project_swap: "на замену за счёт проекта"};
   const hasSecondary = !!(tg && tg.SecondaryButton && tg.isVersionAtLeast && tg.isVersionAtLeast("7.10"));
   const LIMITS = {clips: 10, total_s: 300, upload_mb: 200};   // запасные лимиты, пока сервер не прислал mo.limits
   const SWAP_STATUS = {draft: "черновик", queued: "в очереди", running: "меняю героя", done: "готово", error: "ошибка", cancelled: "отменена"};
@@ -1173,9 +1173,9 @@
   function renderNoCredits(card) {
     const me = S.me, need = card.need, have = card.have !== undefined ? card.have : me.credits;
     const text = card.paidOnly
-      ? "Замена героя оплачивается только купленными кредитами: нужно " + need + ", куплено " + have + ". Подаренные кредиты идут на монтаж, разбор и сценарий."
+      ? "Для замены героя нужно " + need + ", доступно " + have + "."
       : need !== undefined ? "Нужно " + plural(need, "кредит", "кредита", "кредитов") + ", у тебя " + have + "." : (card.message || "Не хватает кредитов.");
-    const box = stateBox("💳", card.paidOnly ? "Нужны купленные кредиты" : "Не хватает кредитов", text + " Пополнить можно звёздами Telegram или USDT — пакеты в профиле.", [
+    const box = stateBox("💳", card.paidOnly ? "Не хватает кредитов для замены" : "Не хватает кредитов", text + " Пополнить можно звёздами Telegram или USDT — пакеты в профиле.", [
       h("button", {class: "act primary", onclick: () => { S.profile.packsOpen = true; S.card = null; go("profile"); }}, ["Пополнить"]),
       h("button", {class: "act", onclick: closeCard}, ["Назад"])
     ]);
@@ -1361,7 +1361,7 @@
     if (sw.cost !== null && sw.cost !== undefined) box.appendChild(section("Цена", [h("p", null, [plural(sw.cost, "кредит", "кредита", "кредитов") +
       " = " + Math.ceil(src.duration - 1e-6) + " с × " + sw.price_per_s + " кр. за секунду. Если не получится — кредиты вернутся."]),
       h("p", {class: "hint"}, ["Занимает " + (sw.quality === "lite" ? "5–10" : "10–20") + " минут. Готовый ролик придёт в чат с ботом."]),
-      h("p", {class: paid < sw.cost ? "warn" : "hint"}, ["Оплата только купленными кредитами: у тебя " + paid + ". Подаренные идут на монтаж, разбор и сценарий."]),
+      h("p", {class: paid < sw.cost ? "warn" : "hint"}, ["Доступно для замены: " + paid + " кр."]),
       paid < sw.cost ? h("div", {class: "acts"}, [h("button", {class: "act primary", onclick: () => { S.profile.packsOpen = true; S.card = null; go("profile"); }}, ["⭐ Купить кредиты"])]) : null]));
     setButtons({text: "✨ Заменить" + (sw.cost ? " · " + sw.cost + " кр." : ""), active: !!sw.can.go && !W.busy, onClick: swapGo},
       {text: "Отмена", active: !W.busy, onClick: swapCancel});
@@ -1402,7 +1402,7 @@
       if (rd && rd.status === "error") kids.push(h("p", {class: "warn"}, [rd.error || "Не получилось переделать отрезок. Кредиты вернул."]));
       if (rd && rd.status === "done") kids.push(h("p", {class: "hint"}, ["Отрезок " + (rd.chunk + 1) + " переделан — новый ролик в чате."]));
       if (chunks.length) {
-        kids.push(h("p", {class: "hint", style: "margin:0 0 10px"}, ["Не понравился один момент? Переделаю только этот отрезок: остальной ролик и звук останутся как есть. Оплата — купленными кредитами, при неудаче верну."]));
+        kids.push(h("p", {class: "hint", style: "margin:0 0 10px"}, ["Не понравился один момент? Переделаю только этот отрезок: остальной ролик и звук останутся как есть. При неудаче верну кредиты на замену."]));
         kids.push(h("div", {class: "chips"}, chunks.map((c) => h("button", {class: "act", disabled: S.swap.busy || !sw.can.redo, onclick: () => swapRedo(sw, c)}, [mmss(c.start) + "–" + mmss(c.end) + " · " + c.cost + " кр."]))));
       }
     }
@@ -1765,7 +1765,7 @@
     const prices = me.prices || {};
     root.appendChild(section("Кредиты", [
       h("div", {class: "row"}, [h("div", {class: "lbl"}, [h("span", {class: "bignum"}, [String(me.credits)]), h("small", null, ["разбор " + prices.analysis + " · сценарий " + prices.script + " · монтаж " + prices.montage + " кр."]),
-        h("small", null, ["из них купленных: " + paidCredits() + " · только ими оплачивается замена героя"])]),
+        h("small", null, ["из них доступно для замены героя: " + paidCredits() + " кр."])]),
         h("button", {class: "act primary", onclick: () => { P.packsOpen = !P.packsOpen; haptic(); render(); }}, [P.packsOpen ? "Скрыть" : "Пополнить"])]),
       P.packsOpen ? renderPacks() : null,
       h("div", {class: "acts"}, [h("button", {class: "act", onclick: () => { P.ledgerOpen = !P.ledgerOpen; haptic(); if (P.ledgerOpen && P.ledger === undefined) loadLedger(); render(); }}, [P.ledgerOpen ? "Скрыть историю" : "История списаний"])]),

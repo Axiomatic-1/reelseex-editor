@@ -43,10 +43,10 @@
     {delta: 20, reason: "stars", ref: "demo_charge_1", at: daysAgo(5)},
     {delta: 10, reason: "welcome", ref: null, at: daysAgo(7)}
   ];
-  // два кошелька, как на сервере: замена героя — только из купленных; остальное сначала тратит подаренные
+  // два кошелька, как на сервере: замена героя расходует доступную для неё часть; остальное сначала тратит подаренные
   function charge(n, reason, ref) {
     if (reason === "swap") {
-      if (user.paid_credits < n) throw err(402, "no_credits", "Замена героя оплачивается только купленными кредитами: нужно " + n + ", куплено " + user.paid_credits + ".", {need: n, have: user.paid_credits});
+      if (user.paid_credits < n) throw err(402, "no_credits", "Для замены героя нужно " + n + ", доступно " + user.paid_credits + ".", {need: n, have: user.paid_credits});
       user.paid_credits -= n;
     } else if (user.credits < n) throw err(402, "no_credits", "Не хватает кредитов: нужно " + n + ", у тебя " + user.credits + ".", {need: n, have: user.credits});
     user.credits -= n;
