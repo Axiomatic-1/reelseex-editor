@@ -80,7 +80,11 @@ window.openOwnerPanel = function ({api, h, actor}) {
     const names={montages:"Монтаж",swaps:"Замена героя",swap_redos:"Переделка",analyses:"Разбор",scripts:"Сценарии"};
     const states={queued:"в очереди",running:"в работе",draft:"черновик",collecting:"сбор клипов",done:"готово",saved:"сохранено",ok:"успех",error:"ошибка",cancelled:"отменено"};
     main.append(block("Доступность",line("Сейчас",stale?"Нет свежего замера":!last.available?"Недоступно":degraded?"Частичная деградация":"Доступно"),
-      ...routes.map(r=>line(r.label+" · "+r.host,r.ok?"OK":"Сбой")),
+      ...routes.map(r=>{
+        const n=health.by_host?.[r.host];
+        const history=n?" · "+n.ok+"/"+n.checks+" за период":"";
+        return line(r.label+" · "+r.host,(r.ok?"OK":"Сбой")+history);
+      }),
       hint("С рабочего Mac · "+date(last.measured)+". Доступность требует загрузки Mini App, чтения БД, проверки авторизации и CORS хотя бы через один публичный API."),
       line("Успешные замеры",health.checks?number(100*health.ok/health.checks)+"%":"—"),
       hint(health.ok+" из "+health.checks+" проверок. Слотов в периоде: "+health.expected+". Начало наблюдений в периоде: "+date(health.first)+". Пропуски не учитываются как успех.")),
