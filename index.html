@@ -318,13 +318,15 @@ body.tabs-on .bottombar { bottom: calc(var(--tabbar-h) + 14px + var(--safe-b)); 
 .toast-act { color: #c8ff3d; font-weight: 700; flex: none; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+.owner label{display:grid;gap:6px;margin:12px 0}.owner .row{flex-wrap:wrap}.owner strong{overflow-wrap:anywhere}.owner .owner-search{display:flex;gap:8px}.owner .owner-search input{min-width:0;flex:1}.owner-event{border-bottom:1px solid #8884;padding:10px 0;overflow-wrap:anywhere}.owner .hint{overflow-wrap:anywhere}.owner .acts{flex-wrap:wrap}
 </style>
 </head>
 <body>
 <main id="view" class="view"></main>
 <nav id="tabbar" class="tabbar" aria-label="Разделы" hidden></nav>
 <div id="toasts"></div>
+<script src="./admin.js?v=owner-1"></script>
 <script src="./demo.js"></script>
-<script src="./app.js?v=swap-funding"></script>
+<script src="./app.js?v=owner-1"></script>
 </body>
 </html>

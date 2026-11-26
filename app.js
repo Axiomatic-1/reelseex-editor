@@ -322,12 +322,17 @@
     if (opts.body !== undefined) { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(opts.body); }
     if (method === "GET") return readApi(path, init, opts.timeout || 16000);
     // При потере ответа исход операции неизвестен. Повтор может создать второй заказ или списание.
+    const controller = opts.timeout ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), opts.timeout) : null;
+    if (controller) init.signal = controller.signal;
     try {
       const reply = await fetch(API + path, init);
       return parseReply(reply.status, await reply.text());
     } catch (e) {
       if (e && e.status !== undefined && !e.gateway) throw e;
       throw {status: 0, error: "network", message: "Связь прервалась. Обнови экран и проверь, выполнилось ли действие."};
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
   // Загрузка клипа из приложения (§3.3 POST /montage/{id}/clips): тело — сами байты файла, не multipart.
@@ -515,6 +520,7 @@
     const q = new URLSearchParams(location.search);
     p = String(p || q.get("screen") || q.get("tgWebAppStartParam") || "").trim();
     if (!p) return null;
+    if (p === "admin" && S.me && S.me.is_admin && !DEMO) return {tab:"profile",card:{type:"admin"}};
     let m;
     if ((m = /^m(\d+)$/.exec(p))) return {tab: "montage", montageId: Number(m[1])};
     if ((m = /^v(\d+)$/.exec(p))) return {tab: "trends", card: {type: "video", id: Number(m[1])}};
@@ -544,7 +550,7 @@
       bar.hidden = true; document.body.classList.remove("tabs-on");
       view.appendChild(h("div", {class: "top"}, [h("div", null, [brandMark(), h("div", {class: "sub"}, ["загружаю…"])])]));
       view.appendChild(skeleton(5));
-    } else if (!S.me.onboarded) {
+    } else if (!S.me.onboarded && !(S.me.is_admin && S.card?.type === "admin" && !DEMO)) {
       bar.hidden = true; document.body.classList.remove("tabs-on");
       view.appendChild(renderOnboarding());
       if (S.onb.step > 0) back = () => { S.onb.step -= 1; haptic(); render(); };
@@ -581,6 +587,7 @@
       case "sound": return renderSoundCard(card);
       case "video": return renderVideoCard(card);
       case "montage": return renderMontageCard(card);
+      case "admin": return S.me.is_admin && !DEMO ? (card.panel ||= window.openOwnerPanel({api, h, actor:S.me.id})) : stateBox("🔒", "Доступ закрыт");
       case "niche": return renderNicheCard(card);
       case "nocredits": return renderNoCredits(card);
       case "swap": return renderSwapCard(card);
@@ -1761,6 +1768,7 @@
     const me = S.me, P = S.profile, root = h("div");
     if (!P.fresh) { P.fresh = true; reloadMe(); }
     root.appendChild(h("div", {class: "top"}, [h("div", null, [h("h1", null, [me.first_name ? me.first_name : "Профиль"]), h("div", {class: "sub"}, [me.username ? "@" + me.username : "профиль"])])]));
+    if (me.is_admin && !DEMO) root.appendChild(section("Владелец", h("button", {class:"act", onclick:()=>openCard({type:"admin"})}, ["Управление"])));
     // кредиты
     const prices = me.prices || {};
     root.appendChild(section("Кредиты", [
@@ -1991,8 +1999,8 @@
       S.fatal = () => errorBox(e, () => { S.fatal = null; boot(); });
       render(); return;
     }
-    if (!S.me.onboarded) { S.tab = "trends"; render(); return; }
     const r = initialRoute();
+    if (!S.me.onboarded && r?.card?.type !== "admin") { S.tab = "trends"; render(); return; }
     if (r) {
       S.tab = r.tab;
       if (r.card) S.card = r.card;
