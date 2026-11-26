@@ -1201,13 +1201,19 @@
       x.upload.onprogress = (ev) => { if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total); };
       x.onload = () => { try { resolve(parseReply(x.status, x.responseText)); } catch (e) { reject(e); } };
       x.onerror = () => reject({status: 0, error: "network", message: "Нет связи с сервером"});
+      if (path.includes("/photo?")) x.timeout = 120000;
+      x.ontimeout = () => reject({status: 0, message: "Истекло время загрузки"});
       x.send(file);
     });
   }
   const swapVideoPicker = h("input", {type: "file", accept: "video/*,.mp4,.mov", hidden: true, tabindex: "-1", "aria-hidden": "true"});
-  const swapPhotoPicker = h("input", {type: "file", accept: "image/*,.jpg,.jpeg,.png,.heic", hidden: true, tabindex: "-1", "aria-hidden": "true"});
+  const swapPhotoPicker = h("input", {type: "file", accept: "image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif", multiple: true, hidden: true, tabindex: "-1", "aria-hidden": "true"});
   swapVideoPicker.addEventListener("change", () => { const f = swapVideoPicker.files && swapVideoPicker.files[0]; swapVideoPicker.value = ""; if (f) swapUpload("source", f); });
-  swapPhotoPicker.addEventListener("change", () => { const f = swapPhotoPicker.files && swapPhotoPicker.files[0]; swapPhotoPicker.value = ""; if (f) swapUpload("photo", f); });
+  swapPhotoPicker.addEventListener("change", () => {
+    const files = Array.from(swapPhotoPicker.files || []);
+    swapPhotoPicker.value = "";
+    if (files.length) uploadHeroPhotos(files);
+  });
   document.body.appendChild(swapVideoPicker); document.body.appendChild(swapPhotoPicker);
 
   const swapToggle = sw;      // переключатель из помощников: внутри функций ниже имя sw занято самой заменой
@@ -1266,24 +1272,72 @@
     try { await fn(); haptic("success"); } catch (e) { handleError(e); }
     finally { W.busy = false; if (swapOnScreen()) render(); }
   }
-  function swapNew() { return swapAct(async () => { S.swap.text = ""; S.swap.link = ""; S.swap.consent = false; swapSet(await api("/swap", {method: "POST"})); }); }
+  function swapNew() { return swapAct(async () => { S.swap.text = ""; S.swap.link = ""; S.swap.consent = false; S.swap.previewId = null; S.swap.photoErrors = []; swapSet(await api("/swap", {method: "POST"})); }); }
+  function sendSwapFile(path, file, extra) {
+    if (DEMO) return api(path,{method:"POST",body:{name:file.name,size:file.size,type:file.type,...extra}});
+    return sendRaw(path,file,swapUploadProgress);
+  }
   async function swapUpload(kind, file) {
     const W = S.swap, sw = W.cur;
     if (!sw || sw.status !== "draft" || W.busy) return;
-    const lim = (sw.limits || {}), mb = kind === "source" ? (lim.upload_mb || 200) : (lim.photo_mb || 15);
-    if (file.size > mb * 1024 * 1024) { toast("«" + shortName(file.name) + "» больше " + mb + " МБ"); return; }
-    const nm = encodeURIComponent(file.name || (kind === "source" ? "video.mp4" : "photo.jpg"));
-    W.busy = true; W.up = {name: file.name || "файл", pct: 0}; haptic("impact"); render();
-    const tick = (p) => { if (W.up) { W.up.pct = p; const bar = document.querySelector(".up.swap .bar i"); if (bar) bar.style.width = Math.round(p * 100) + "%"; } };
+    if (file.size > (sw.limits.upload_mb || 200) * 1024 * 1024) {
+      toast("«" + shortName(file.name) + "» больше " + sw.limits.upload_mb + " МБ"); return;
+    }
+    const nm = encodeURIComponent(file.name || "video.mp4");
+    W.busy = true; W.up = {name: file.name, pct: 0}; render();
     try {
-      let out;
-      if (DEMO) out = await (kind === "source" ? api("/swap/" + sw.id + "/source?name=" + nm, {method: "POST", body: {name: file.name, size: file.size, type: file.type}})
-        : api("/swap/" + sw.id + "/photo?name=" + nm, {method: "POST", body: {name: file.name, size: file.size, type: file.type}}));
-      else out = await sendRaw("/swap/" + sw.id + "/" + kind + "?name=" + nm, file, tick);
-      swapSet(out); if (kind === "photo") W.consent = false;
+      const result = await sendSwapFile("/swap/" + sw.id + "/source?name=" + nm, file);
+      swapSet(result);
       haptic("success");
     } catch (e) { handleError(e, () => swapUpload(kind, file)); }
     finally { W.busy = false; W.up = null; if (swapOnScreen()) render(); }
+  }
+  function swapUploadProgress(pct) {
+    if (!S.swap.up) return;
+    S.swap.up.pct = pct;
+    const bar = document.querySelector(".up.swap .bar i");
+    if (bar) bar.style.width = Math.round(pct * 100) + "%";
+  }
+  async function uploadHeroPhotos(files, retry) {
+    const W = S.swap, sw = W.cur;
+    if (!sw || sw.status !== "draft" || W.busy) return;
+    const max = sw.limits.max_photos || 4;
+    if (files.length > max) { toast("Выбери до " + max + " фото за раз."); return; }
+    if (W.photoDraft !== sw.id) { W.photoDraft = sw.id; W.photoErrors = []; }
+    W.busy = true;
+    try {
+      if (retry) await api("/swap/" + sw.id);
+      for (const [index, file] of files.entries()) {
+        const failures = W.photoErrors.filter(e => e.file !== file);
+        W.photoErrors = failures;
+        W.up = {name:file.name, pct:0}; if (swapOnScreen()) render();
+        const validType = file.name.includes(".") ? /\.(jpe?g|png|webp|hei[cf])$/i.test(file.name)
+          : /^image\/(jpeg|png|webp|hei[cf])$/i.test(file.type);
+        if (!file.size || file.size > sw.limits.photo_mb * 1024 * 1024 || !validType) {
+          failures.push({file, message:"Нужен JPEG, PNG, WebP или HEIC до " + sw.limits.photo_mb + " МБ."}); continue;
+        }
+        const nm = encodeURIComponent(file.name);
+        try {
+          const digest = DEMO ? Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",await file.arrayBuffer())),
+            n=>n.toString(16).padStart(2,"0")).join("") : null;
+          const result = await sendSwapFile("/swap/" + sw.id + "/photo?append=true&name=" + nm, file, {file,digest});
+          if (W.cur?.id === sw.id) { swapSet(result); W.consent = false; }
+        } catch (e) {
+          if (e.status === 401) { showAuth(); return; }
+          const remaining = (!e.status || e.status >= 500 || e.status === 429) ? files.slice(index) : null;
+          failures.push({file,message:e.message || "Ошибка загрузки",remaining});
+          if (remaining) break;
+        }
+      }
+    } catch (e) { handleError(e); }
+    finally { W.busy = false; W.up = null; if (swapOnScreen()) render(); }
+  }
+  function removeHeroPhoto(sw, photo) {
+    return swapAct(async () => {
+      const id = encodeURIComponent(photo.id);
+      swapSet(await api("/swap/" + sw.id + "/photo?photo_id=" + id, {method: "DELETE"}));
+      S.swap.consent = false; S.swap.previewId = null;
+    });
   }
   function swapLink() {
     const W = S.swap, url = (W.link || "").trim();
@@ -1293,7 +1347,10 @@
   function swapSubject() {
     const W = S.swap, text = (W.text || "").trim();
     if (text.length < 2) { toast("Напиши, кого вставить: например, «капибара»"); return; }
-    return swapAct(async () => { swapSet(await api("/swap/" + W.cur.id + "/subject", {method: "POST", body: {text}})); W.consent = false; });
+    return swapAct(async () => {
+      if (W.cur.subject?.mode === "photo" && !(await confirmDialog("Заменить загруженные фото подбором по названию?"))) return;
+      W.photoErrors = []; W.previewId = null;
+      swapSet(await api("/swap/" + W.cur.id + "/subject", {method: "POST", body: {text}})); W.consent = false; });
   }
   function swapGo() {
     const W = S.swap, sw = W.cur;
@@ -1316,8 +1373,7 @@
   function swapWho(sub) {
     if (!sub) return "";
     if (sub.mode === "name") return (sub.name_ru || sub.text || "животное") + " — фото в высоком разрешении подберу сам";
-    return sub.kind === "animal" ? "твоё фото: " + (sub.name_ru || "животное") + " — добавлю к нему фото этого вида в высоком разрешении"
-      : "твоё фото" + (sub.name_ru ? ": " + sub.name_ru : "") + " — работаю с этим снимком";
+    return sub.name_ru || "Герой с твоих фото";
   }
   function renderSwapDraft(sw) {
     const W = S.swap, box = h("div"), src = sw.source, sub = sw.subject, lim = sw.limits || {};
@@ -1342,8 +1398,38 @@
     who.addEventListener("input", () => { W.text = who.value; });
     who.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); swapSubject(); } });
     subKids.push(h("div", {class: "field inline"}, [who, h("button", {class: "act primary", disabled: W.busy, onclick: swapSubject}, ["Выбрать"])]));
-    subKids.push(h("div", {class: "chips", style: "margin-top:10px"}, [h("button", {class: "act", disabled: W.busy, onclick: () => swapPhotoPicker.click()}, ["📷 Или своё фото"])]));
-    subKids.push(h("p", {class: "hint"}, ["По названию нахожу настоящих животных. Человека, персонажа или предмет — только по фото."]));
+    const photos = sub?.photos || [], max = lim.max_photos || 4;
+    subKids.push(h("p", {class:"hint"}, ["До " + max + " фото одного героя. Первое — основное. Добавь анфас, профиль или общий план. JPEG, PNG, WebP, HEIC · до " + (lim.photo_mb || 15) + " МБ каждое, от 300 px по короткой стороне."]));
+    if (photos.length) {
+      const grid = h("div", {class:"hero-photos"});
+      photos.forEach((photo, i) => {
+        const label = "Фото " + (i + 1);
+        grid.appendChild(h("div", {class:"hero-photo"}, [
+          h("button", {type:"button",class:"hero-thumb","aria-label":"Посмотреть " + label,disabled:!photo.preview,
+            onclick:()=>{W.previewId = W.previewId === photo.id ? null : photo.id; render();}},
+            photo.preview ? h("img",{src:photo.preview,alt:photo.name}) : label),
+          h("small",null,photo.available === false ? "Файл устарел. Добавь заново." : i === 0 ? "Основное" : label),
+          h("button",{class:"act",type:"button","aria-label":"Удалить " + label,disabled:W.busy,onclick:()=>removeHeroPhoto(sw,photo)},"Удалить")
+        ]));
+      });
+      subKids.push(grid);
+      const selected = photos.find(p => p.id === W.previewId);
+      if (selected?.preview) subKids.push(h("div", {class:"hero-detail"}, [
+        h("img",{src:selected.preview,alt:selected.name}),h("button",{class:"act",onclick:()=>{W.previewId=null;render();}},"Закрыть фото")
+      ]));
+    }
+    const failures = W.photoDraft === sw.id ? W.photoErrors || [] : [];
+    subKids.push(h("button", {class:"act",disabled:W.busy || (photos.length >= max && photos.every(p=>p.available !== false)) || failures.some(e=>e.remaining),onclick:()=>swapPhotoPicker.click()},
+      [(photos.length ? "Добавить фото" : "Выбрать фото") + " · " + photos.length + "/" + max]));
+    for (const error of failures) {
+      const actions = h("div",{class:"chips"});
+      if (error.remaining) actions.appendChild(h("button",{class:"act",disabled:W.busy,
+        onclick:()=>uploadHeroPhotos(error.remaining,true)},"Повторить"));
+      actions.appendChild(h("button",{class:"act",disabled:W.busy,
+        onclick:()=>{W.photoErrors=W.photoErrors.filter(e=>e!==error);render();}},error.remaining?"Отменить":"Скрыть"));
+      const pending = error.remaining?.length > 1 ? " В очереди: " + error.remaining.length + "." : "";
+      subKids.push(row(error.file.name,error.message + pending,actions));
+    }
     if (sw.needs_consent) subKids.push(row("Это я или у меня есть разрешение", "на фото человек — без согласия не запускаю",
       swapToggle(W.consent, "Согласие на использование внешности", () => { W.consent = !W.consent; haptic(); render(); })));
     box.appendChild(section("2. Кого вставить", subKids));

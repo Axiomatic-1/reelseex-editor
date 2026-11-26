@@ -511,7 +511,7 @@
   });
 
   // ---------- замена героя (§3.7): черновик → ролик → кого вставить → go → queued → running → done за ~6 с ----------
-  const SWAP_PRICE = 17, SWAP_LIMITS = {min_s: 3, max_s: 30, upload_mb: 200, photo_mb: 15};
+  const SWAP_PRICE = 17, SWAP_LIMITS = {min_s: 3, max_s: 30, upload_mb: 200, photo_mb: 15, max_photos: 4};
   const swaps = {};
   const SWAP_PRICE_LITE = 6;
   let swapSeq = 0;
@@ -570,15 +570,32 @@
     const x = draftSwap(id), text = String(b.text || "").trim();
     if (text.length < 2) throw err(400, "bad_request", "Напиши, кого вставить: например, «капибара».");
     if (/иван|мария|человек|шрек/i.test(text)) throw err(400, "bad_request", "По названию нахожу только настоящих животных. Для персонажа или предмета пришли фото.");
+    demoPhotos(x, []);
     x.subject = {mode: "name", text, kind: "animal", name_ru: text.toLowerCase()}; x.updated_at = iso(Date.now());
     return swapOut(x);
   });
-  on("POST", /^\/swap\/(\d+)\/photo$/, ([id], q, b) => {
-    const x = draftSwap(id);
-    if (b && b.type && !/^image\//.test(b.type)) throw err(400, "bad_request", "Это не фото — пришли jpg или png.");
-    const person = /me|я|selfie|portrait/i.test((b && b.name) || "");          // в демо «человек» — по имени файла
-    x.subject = {mode: "photo", text: null, kind: person ? "person" : "animal", name_ru: person ? "человек" : "рыжий кот"};
+  function demoPhotos(x, photos) {
+    for (const p of x.subject?.photos || []) {
+      if (p.preview && !photos.some(item => item.id === p.id)) URL.revokeObjectURL(p.preview);
+    }
+    x.subject = photos.length ? {mode:"photo",kind:photos.some(p=>p.person)?"person":"animal",
+      name_ru:photos[0].person?"человек":"животное",photos} : null;
     x.updated_at = iso(Date.now());
+  }
+  on("POST", /^\/swap\/(\d+)\/photo$/, ([id], q, b) => {
+    const x = draftSwap(id), append = q.get("append") === "true";
+    if (b?.type && !/^image\//.test(b.type)) throw err(400,"bad_request","Нужно фото");
+    const name = q.get("name") || b?.name || "Фото героя";
+    const key = b?.digest || name;
+    const photos = append ? x.subject?.photos || [] : [];
+    if (photos.some(p=>p.id===key)) return swapOut(x);
+    if (photos.length >= SWAP_LIMITS.max_photos) throw err(400,"bad_request","Можно добавить до 4 фото");
+    demoPhotos(x,[...photos,{id:key,name,person:/me|я|selfie|portrait/i.test(name),preview:b?.file?URL.createObjectURL(b.file):null}]);
+    return swapOut(x);
+  });
+  on("DELETE", /^\/swap\/(\d+)\/photo$/, ([id], q) => {
+    const x = draftSwap(id);
+    if (x.subject?.photos) demoPhotos(x,x.subject.photos.filter(p=>p.id!==q.get("photo_id")));
     return swapOut(x);
   });
   on("POST", /^\/swap\/(\d+)\/cancel$/, ([id]) => {
